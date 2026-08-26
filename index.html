@@ -297,6 +297,22 @@
     box-shadow:0 6px 20px rgba(0,0,0,.35);
   }
 
+  #loadingOverlay{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    background:rgba(10,15,26,.45); z-index:15; backdrop-filter:blur(1px);
+  }
+  .loading-card{
+    background:rgba(17,24,43,.95); border:1px solid var(--border); border-radius:12px;
+    padding:20px 26px; display:flex; align-items:center; gap:12px;
+    font-size:13px; font-weight:600; color:var(--text);
+  }
+  .spinner{
+    width:18px; height:18px; border-radius:50%;
+    border:2.5px solid var(--border); border-top-color:var(--teal);
+    animation:spin .7s linear infinite;
+  }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+
   ::-webkit-scrollbar{ width:8px; height:8px; }
   ::-webkit-scrollbar-thumb{ background:var(--border); border-radius:4px; }
 
@@ -408,6 +424,12 @@
   <div id="mapArea">
     <div id="map"></div>
     <div id="toast"></div>
+    <div id="loadingOverlay" style="display:none">
+      <div class="loading-card">
+        <div class="spinner"></div>
+        <div id="loadingLabel">กำลังประมวลผล...</div>
+      </div>
+    </div>
     <div id="emptyState">
       <div class="card">
         <h2>ยังไม่มีข้อมูลบนแผนที่</h2>
@@ -527,12 +549,15 @@ const HeatLayer = L.Layer.extend({
     const octx = off.getContext('2d');
 
     const bounds = this._map.getBounds().pad(0.3);
+    const center = this._map.getCenter();
+    // One shared radius/stamp per redraw (recomputing per-point is the
+    // dominant cost on large datasets and the visual difference is negligible).
+    const r = this._metersToPixels(center, this._radiusMeters);
+    const stamp = this._buildStamp(r);
     let drawn = 0;
     for (const p of this._points) {
       if (!bounds.contains([p.lat, p.lng])) continue;
       const pt = this._map.latLngToContainerPoint([p.lat, p.lng]);
-      const r = this._metersToPixels({ lat: p.lat, lng: p.lng }, this._radiusMeters);
-      const stamp = this._buildStamp(r);
       octx.globalAlpha = 0.5;
       octx.drawImage(stamp, pt.x - r, pt.y - r);
       drawn++;
@@ -658,17 +683,22 @@ function parseWorkbookRows(rows, sourceLabel) {
 
 function handleFile(file) {
   const reader = new FileReader();
+  showLoading('กำลังอ่านไฟล์...');
   reader.onload = (e) => {
-    try {
-      const data = new Uint8Array(e.target.result);
-      const wb = XLSX.read(data, { type: 'array' });
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-      parseWorkbookRows(rows, file.name);
-    } catch (err) {
-      console.error(err);
-      showToast('อ่านไฟล์ไม่สำเร็จ กรุณาตรวจสอบรูปแบบไฟล์');
-    }
+    setTimeout(() => {
+      try {
+        const data = new Uint8Array(e.target.result);
+        const wb = XLSX.read(data, { type: 'array' });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+        const ok = parseWorkbookRows(rows, file.name);
+        if (!ok) hideLoading();
+      } catch (err) {
+        console.error(err);
+        showToast('อ่านไฟล์ไม่สำเร็จ กรุณาตรวจสอบรูปแบบไฟล์');
+        hideLoading();
+      }
+    }, 20);
   };
   reader.readAsArrayBuffer(file);
 }
@@ -695,10 +725,35 @@ function computeClusters(points, radiusMeters) {
   function find(x) { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
   function union(a, b) { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; }
 
+  // Spatial grid so we only compare points that could plausibly be within
+  // radiusMeters of each other, instead of every pair (O(n^2) -> ~O(n)).
+  const metersPerDegLat = 110574;
+  const cellSizeDeg = Math.max(radiusMeters / metersPerDegLat, 0.0001);
+  const grid = new Map();
+  function cellOf(p) {
+    return [Math.floor(p.lng / cellSizeDeg), Math.floor(p.lat / cellSizeDeg)];
+  }
   for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      if (haversine(points[i].lat, points[i].lng, points[j].lat, points[j].lng) <= radiusMeters) {
-        union(i, j);
+    const [cx, cy] = cellOf(points[i]);
+    const key = cx + ',' + cy;
+    let bucket = grid.get(key);
+    if (!bucket) { bucket = []; grid.set(key, bucket); }
+    bucket.push(i);
+  }
+
+  for (let i = 0; i < n; i++) {
+    const p = points[i];
+    const [cx, cy] = cellOf(p);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const bucket = grid.get((cx + dx) + ',' + (cy + dy));
+        if (!bucket) continue;
+        for (const j of bucket) {
+          if (j <= i) continue; // each unordered pair evaluated exactly once
+          if (haversine(p.lat, p.lng, points[j].lat, points[j].lng) <= radiusMeters) {
+            union(i, j);
+          }
+        }
       }
     }
   }
@@ -710,6 +765,7 @@ function computeClusters(points, radiusMeters) {
     groups.get(root).push(points[i]);
   }
 
+  const MAX_SPREAD_EXACT_LIMIT = 250; // avoid O(m^2) blowup for one giant cluster
   const clusters = [];
   groups.forEach(members => {
     const lat = members.reduce((s, p) => s + p.lat, 0) / members.length;
@@ -719,10 +775,16 @@ function computeClusters(points, radiusMeters) {
       distanceToCenter: Math.round(haversine(p.lat, p.lng, lat, lng)),
     }));
     let maxSpread = 0;
-    for (let i = 0; i < members.length; i++) {
-      for (let j = i + 1; j < members.length; j++) {
-        maxSpread = Math.max(maxSpread, haversine(members[i].lat, members[i].lng, members[j].lat, members[j].lng));
+    if (members.length <= MAX_SPREAD_EXACT_LIMIT) {
+      for (let i = 0; i < members.length; i++) {
+        for (let j = i + 1; j < members.length; j++) {
+          maxSpread = Math.max(maxSpread, haversine(members[i].lat, members[i].lng, members[j].lat, members[j].lng));
+        }
       }
+    } else {
+      // Approximate: 2x the farthest member from centroid is a safe upper bound
+      // and avoids an O(m^2) scan on very large clusters.
+      maxSpread = 2 * Math.max(...withDist.map(p => p.distanceToCenter));
     }
     clusters.push({
       lat, lng,
@@ -810,17 +872,28 @@ function populateSlaFilter(points) {
   });
 }
 
+function showLoading(label) {
+  document.getElementById('loadingLabel').textContent = label || 'กำลังประมวลผล...';
+  document.getElementById('loadingOverlay').style.display = 'flex';
+}
+function hideLoading() {
+  document.getElementById('loadingOverlay').style.display = 'none';
+}
+
 function applyFilters() {
-  state.points = state.allPoints.filter(p => {
-    const areaOk = !state.selectedAreas || !p.area || state.selectedAreas.has(p.area);
-    const slaOk = !state.selectedSlaBuckets || !p.slaBucket || state.selectedSlaBuckets.has(p.slaBucket);
-    return areaOk && slaOk;
-  });
-  if (!state.points.length) {
-    showToast('ไม่มีจุดที่ตรงกับตัวกรองที่เลือก');
-  }
-  fitToPoints(state.points.length ? state.points : state.allPoints);
-  recomputeAndRender();
+  showLoading('กำลังกรองข้อมูล...');
+  setTimeout(() => {
+    state.points = state.allPoints.filter(p => {
+      const areaOk = !state.selectedAreas || !p.area || state.selectedAreas.has(p.area);
+      const slaOk = !state.selectedSlaBuckets || !p.slaBucket || state.selectedSlaBuckets.has(p.slaBucket);
+      return areaOk && slaOk;
+    });
+    if (!state.points.length) {
+      showToast('ไม่มีจุดที่ตรงกับตัวกรองที่เลือก');
+    }
+    fitToPoints(state.points.length ? state.points : state.allPoints);
+    recomputeAndRender();
+  }, 20);
 }
 
 document.getElementById('areaSelectAll').addEventListener('click', () => {
@@ -859,22 +932,17 @@ function pinColor(count) {
   return { hex: '#35c9b0', rgb: '53,201,176' };                    // teal (solo points)
 }
 
+const canvasRenderer = L.canvas({ padding: 0.5 });
+const DOM_MARKER_LIMIT = 1500; // above this, switch to lightweight canvas circle markers
+
 function renderBubbles(clusters) {
   clusterLayerGroup.clearLayers();
   const maxCount = clusters.length ? clusters[0].count : 1;
+  const useCanvas = clusters.length > DOM_MARKER_LIMIT;
+
   clusters.forEach(c => {
     const size = pinSize(c.count, maxCount);
     const color = pinColor(c.count);
-    const icon = L.divIcon({
-      className: '',
-      html: `<div class="cluster-pin" style="width:${size}px;height:${size}px;font-size:${Math.max(10, size * 0.32)}px;
-        background:rgba(${color.rgb},0.8);
-        box-shadow:0 0 0 4px rgba(${color.rgb},.18), 0 2px 8px rgba(0,0,0,.4);
-        border-color:${color.hex};">${c.count}</div>`,
-      iconSize: [size, size],
-      iconAnchor: [size / 2, size / 2],
-    });
-    const marker = L.marker([c.lat, c.lng], { icon });
     const memberLines = c.members.slice(0, 15).map(m => {
       const codePrefix = m.code ? `${m.code} - ` : '';
       const extras = [m.area, m.sla ? `SLA ${m.sla}` : ''].filter(Boolean).join(' · ');
@@ -882,10 +950,35 @@ function renderBubbles(clusters) {
     });
     const shown = memberLines.join(', ');
     const extra = c.members.length > 15 ? ` และอีก ${c.members.length - 15} แห่ง` : '';
-    marker.bindPopup(
+    const popupHtml =
       `<div class="popup-title">กลุ่มที่ ${c.groupNo} — ${c.count.toLocaleString()} จุด</div>` +
-      `<div class="popup-body">${shown}${extra}</div>`
-    );
+      `<div class="popup-body">${shown}${extra}</div>`;
+
+    let marker;
+    if (useCanvas) {
+      // Canvas circle markers: no per-marker DOM node, scales to many thousands.
+      marker = L.circleMarker([c.lat, c.lng], {
+        renderer: canvasRenderer,
+        radius: size / 2,
+        fillColor: color.hex,
+        fillOpacity: 0.8,
+        color: color.hex,
+        weight: 1,
+        opacity: 0.5,
+      });
+    } else {
+      const icon = L.divIcon({
+        className: '',
+        html: `<div class="cluster-pin" style="width:${size}px;height:${size}px;font-size:${Math.max(10, size * 0.32)}px;
+          background:rgba(${color.rgb},0.8);
+          box-shadow:0 0 0 4px rgba(${color.rgb},.18), 0 2px 8px rgba(0,0,0,.4);
+          border-color:${color.hex};">${c.count}</div>`,
+        iconSize: [size, size],
+        iconAnchor: [size / 2, size / 2],
+      });
+      marker = L.marker([c.lat, c.lng], { icon });
+    }
+    marker.bindPopup(popupHtml);
     marker.addTo(clusterLayerGroup);
   });
 }
@@ -913,13 +1006,14 @@ function applyLayerVisibility() {
 }
 
 function recomputeAndRender() {
-  if (!state.allPoints.length) return;
+  if (!state.allPoints.length) { hideLoading(); return; }
   if (!state.points.length) {
     state.clusters = [];
     clusterLayerGroup.clearLayers();
     heatLayer.setPoints([]);
     updateStats([]);
     document.getElementById('exportBtn').disabled = true;
+    hideLoading();
     return;
   }
   state.clusters = computeClusters(state.points, state.radius);
@@ -929,6 +1023,7 @@ function recomputeAndRender() {
   updateStats(state.clusters);
   applyLayerVisibility();
   document.getElementById('exportBtn').disabled = false;
+  hideLoading();
 }
 
 /* ============================= Export to Excel ============================= */
@@ -1085,11 +1180,14 @@ fileInput.addEventListener('change', (e) => { if (e.target.files.length) handleF
 
 const radiusSlider = document.getElementById('radiusSlider');
 const radiusValueEl = document.getElementById('radiusValue');
+let radiusDebounceTimer = null;
 radiusSlider.addEventListener('input', () => {
   state.radius = parseInt(radiusSlider.value, 10);
   radiusValueEl.innerHTML = `${state.radius}<span>เมตร</span>`;
   drawRing(state.radius);
-  recomputeAndRender();
+  clearTimeout(radiusDebounceTimer);
+  if (state.allPoints.length > 3000) showLoading('กำลังจัดกลุ่มใหม่...');
+  radiusDebounceTimer = setTimeout(recomputeAndRender, 150);
 });
 
 document.querySelectorAll('.toggle-item').forEach(item => {
