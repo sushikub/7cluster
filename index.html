@@ -1,0 +1,847 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>7-11 Stores Cluster</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --bg: #0a0f1a;
+    --panel: #11182b;
+    --panel-2: #161f38;
+    --border: #232d47;
+    --text: #e8ecf6;
+    --muted: #8892ab;
+    --teal: #35c9b0;
+    --teal-dim: #1f7d6c;
+    --amber: #f2a93b;
+    --danger: #e2596b;
+    --mono: ui-monospace, SFMono-Regular, "Roboto Mono", Menlo, Consolas, monospace;
+    --sans: "Inter", ui-sans-serif, -apple-system, "Segoe UI", "Noto Sans Thai", "Helvetica Neue", Arial, sans-serif;
+  }
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; margin:0; }
+  body{
+    font-family:var(--sans);
+    background:var(--bg);
+    color:var(--text);
+    display:flex;
+    overflow:hidden;
+  }
+  #app{ display:flex; width:100%; height:100%; }
+
+  /* ---------- Sidebar ---------- */
+  #sidebar{
+    width:340px;
+    min-width:340px;
+    background:var(--panel);
+    border-right:1px solid var(--border);
+    display:flex;
+    flex-direction:column;
+    overflow-y:auto;
+  }
+  .brand{
+    padding:20px 20px 16px;
+    border-bottom:1px solid var(--border);
+  }
+  .brand-mark{
+    display:flex; align-items:center; gap:10px;
+  }
+  .brand-dot{
+    width:10px; height:10px; border-radius:50%;
+    background:var(--teal);
+    box-shadow:0 0 12px var(--teal);
+  }
+  .brand h1{
+    font-size:15px; font-weight:700; margin:0; letter-spacing:.2px;
+  }
+  .brand p{
+    margin:6px 0 0; font-size:12px; color:var(--muted); line-height:1.5;
+  }
+
+  .section{
+    padding:18px 20px;
+    border-bottom:1px solid var(--border);
+  }
+  .section-label{
+    font-size:11px; text-transform:uppercase; letter-spacing:1.2px;
+    color:var(--teal); font-weight:700; margin-bottom:12px;
+    display:flex; align-items:center; gap:8px;
+  }
+  .section-label .num{
+    font-family:var(--mono); color:var(--muted); font-size:10px;
+  }
+
+  /* Upload zone */
+  #dropzone{
+    border:1.5px dashed var(--border);
+    border-radius:10px;
+    padding:18px 14px;
+    text-align:center;
+    cursor:pointer;
+    transition:border-color .15s, background .15s;
+    background:var(--panel-2);
+  }
+  #dropzone:hover, #dropzone.drag{
+    border-color:var(--teal);
+    background:rgba(53,201,176,.06);
+  }
+  #dropzone svg{ width:26px; height:26px; color:var(--teal); margin-bottom:8px; }
+  #dropzone .title{ font-size:13px; font-weight:600; }
+  #dropzone .sub{ font-size:11.5px; color:var(--muted); margin-top:4px; }
+  #fileInput{ display:none; }
+  #gdriveBtn{
+    width:100%; margin-top:10px;
+    display:flex; align-items:center; justify-content:center; gap:8px;
+    background:var(--panel-2); color:var(--text); border:1px solid var(--border);
+    font-family:var(--sans); font-weight:600; font-size:12.5px;
+    padding:10px 10px; border-radius:8px; cursor:pointer;
+    transition:border-color .15s, background .15s;
+  }
+  #gdriveBtn svg{ width:14px; height:14px; color:#4285F4; flex-shrink:0; }
+  #gdriveBtn:hover{ border-color:#4285F4; background:rgba(66,133,244,.08); }
+  #gdriveBtn:disabled{ opacity:.55; cursor:wait; }
+  #gdriveMeta{
+    margin-top:8px; font-size:10.5px; color:var(--muted); text-align:center;
+  }
+  #gdriveMeta span{ color:var(--teal); font-family:var(--mono); }
+  #fileMeta{
+    margin-top:10px; font-size:11.5px; color:var(--muted);
+    font-family:var(--mono); word-break:break-all;
+    display:none;
+  }
+  #fileMeta.show{ display:block; }
+  #colMap{
+    margin-top:10px; font-size:11px; color:var(--muted); line-height:1.6;
+    display:none;
+  }
+  #colMap.show{ display:block; }
+  #colMap b{ color:var(--text); font-weight:600; }
+
+  /* Radius control */
+  .radius-row{
+    display:flex; align-items:baseline; justify-content:space-between;
+    margin-bottom:10px;
+  }
+  .radius-value{
+    font-family:var(--mono); font-size:24px; font-weight:700; color:var(--amber);
+  }
+  .radius-value span{ font-size:13px; color:var(--muted); font-weight:500; margin-left:4px; }
+  input[type=range]{
+    width:100%; -webkit-appearance:none; appearance:none;
+    height:4px; border-radius:2px;
+    background:var(--border);
+    outline:none;
+    margin:8px 0 6px;
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none; appearance:none;
+    width:16px; height:16px; border-radius:50%;
+    background:var(--amber);
+    border:3px solid var(--bg);
+    box-shadow:0 0 0 1px var(--amber);
+    cursor:pointer;
+  }
+  input[type=range]::-moz-range-thumb{
+    width:16px; height:16px; border-radius:50%;
+    background:var(--amber); border:3px solid var(--bg);
+    box-shadow:0 0 0 1px var(--amber); cursor:pointer;
+  }
+  .tick-row{
+    display:flex; justify-content:space-between;
+    font-family:var(--mono); font-size:9.5px; color:var(--muted);
+  }
+  /* signature radius-ring visual */
+  #ringWrap{
+    margin-top:14px; display:flex; align-items:center; justify-content:center;
+    background:var(--panel-2); border:1px solid var(--border); border-radius:10px;
+    padding:12px;
+  }
+  #ringSvg{ display:block; }
+  .ring-caption{
+    text-align:center; font-size:10.5px; color:var(--muted); margin-top:6px;
+  }
+
+  /* View mode */
+  .toggle-group{ display:flex; flex-direction:column; gap:8px; }
+  .toggle-item{
+    display:flex; align-items:center; justify-content:space-between;
+    background:var(--panel-2); border:1px solid var(--border);
+    border-radius:8px; padding:10px 12px;
+    font-size:13px; cursor:pointer;
+    transition:border-color .15s;
+  }
+  .toggle-item:hover{ border-color:var(--teal-dim); }
+  .toggle-item.active{ border-color:var(--teal); }
+  .toggle-item .label{ display:flex; align-items:center; gap:9px; }
+  .swatch{ width:10px; height:10px; border-radius:3px; }
+  .swatch.bubble{ background:var(--teal); }
+  .swatch.heat{ background:linear-gradient(90deg, #3b82f6, var(--amber), var(--danger)); }
+  .switch{
+    width:34px; height:19px; border-radius:20px;
+    background:var(--border); position:relative; transition:background .15s;
+    flex-shrink:0;
+  }
+  .switch::after{
+    content:""; position:absolute; top:2px; left:2px;
+    width:15px; height:15px; border-radius:50%; background:#fff;
+    transition:left .15s;
+  }
+  .toggle-item.active .switch{ background:var(--teal); }
+  .toggle-item.active .switch::after{ left:17px; }
+
+  /* Stats */
+  .stat-grid{
+    display:grid; grid-template-columns:1fr 1fr; gap:10px;
+  }
+  .stat-card{
+    background:var(--panel-2); border:1px solid var(--border);
+    border-radius:8px; padding:10px 12px;
+  }
+  .stat-card .v{ font-family:var(--mono); font-size:19px; font-weight:700; color:var(--text); }
+  .stat-card .k{ font-size:10.5px; color:var(--muted); margin-top:2px; }
+
+  #exportBtn{
+    width:100%; margin-top:12px;
+    display:flex; align-items:center; justify-content:center; gap:8px;
+    background:var(--teal); color:#04150f; border:none;
+    font-family:var(--sans); font-weight:700; font-size:13px;
+    padding:11px 12px; border-radius:8px; cursor:pointer;
+    transition:background .15s, opacity .15s, transform .1s;
+  }
+  #exportBtn svg{ width:15px; height:15px; }
+  #exportBtn:hover:not(:disabled){ background:#4fe0c6; }
+  #exportBtn:active:not(:disabled){ transform:translateY(1px); }
+  #exportBtn:disabled{ background:var(--border); color:var(--muted); cursor:not-allowed; }
+
+  #legendBox{ margin-top:12px; }
+  #legendBox .bar{
+    height:8px; border-radius:4px;
+    background:linear-gradient(90deg, #3b82f6, #22d3ee, #a3e635, var(--amber), var(--danger));
+  }
+  #legendBox .row{
+    display:flex; justify-content:space-between; font-size:9.5px;
+    color:var(--muted); font-family:var(--mono); margin-top:4px;
+  }
+
+  .footer-note{
+    padding:16px 20px; font-size:11px; color:var(--muted); line-height:1.6; margin-top:auto;
+  }
+
+  /* ---------- Map area ---------- */
+  #mapArea{ flex:1; position:relative; }
+  #map{ width:100%; height:100%; background:#0d1424; }
+  .leaflet-container{ font-family:var(--sans); }
+
+  #emptyState{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    pointer-events:none; z-index:5;
+  }
+  #emptyState .card{
+    background:rgba(17,24,43,.92); border:1px solid var(--border);
+    border-radius:12px; padding:24px 28px; text-align:center; max-width:320px;
+    backdrop-filter:blur(4px);
+  }
+  #emptyState .card h2{ margin:0 0 6px; font-size:14.5px; }
+  #emptyState .card p{ margin:0; font-size:12.5px; color:var(--muted); line-height:1.6; }
+
+  .cluster-pin{
+    display:flex; align-items:center; justify-content:center;
+    border-radius:50%; color:#04150f; font-weight:700; font-family:var(--mono);
+    background:var(--teal);
+    box-shadow:0 0 0 4px rgba(53,201,176,.18), 0 2px 8px rgba(0,0,0,.4);
+    border:2px solid #0a2c26;
+  }
+  .leaflet-popup-content-wrapper{
+    background:var(--panel); color:var(--text); border:1px solid var(--border);
+    border-radius:10px;
+  }
+  .leaflet-popup-tip{ background:var(--panel); }
+  .popup-title{ font-weight:700; font-size:13px; margin-bottom:4px; color:var(--teal); }
+  .popup-body{ font-size:12px; color:var(--muted); line-height:1.6; max-height:140px; overflow-y:auto; }
+
+  #toast{
+    position:absolute; top:16px; left:50%; transform:translateX(-50%);
+    background:var(--danger); color:#2a0a0f; font-weight:600; font-size:12.5px;
+    padding:9px 16px; border-radius:8px; z-index:20; display:none;
+    box-shadow:0 6px 20px rgba(0,0,0,.35);
+  }
+
+  ::-webkit-scrollbar{ width:8px; height:8px; }
+  ::-webkit-scrollbar-thumb{ background:var(--border); border-radius:4px; }
+
+  @media (max-width: 760px){
+    #app{ flex-direction:column; }
+    #sidebar{ width:100%; min-width:0; max-height:52vh; }
+    #mapArea{ flex:1; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <div class="brand">
+      <div class="brand-mark">
+        <div class="brand-dot"></div>
+        <h1>7-11 STORES CLUSTER</h1>
+      </div>
+      <p>อัปโหลดพิกัดสาขา 7-11 จาก Excel แล้วจัดกลุ่มตามระยะรัศมี พร้อมแสดงผลเป็นแผนที่ Heatmap และบับเบิ้ลจำนวนสาขา</p>
+    </div>
+
+    <div class="section">
+      <div class="section-label"><span class="num">01</span> อัปโหลดไฟล์</div>
+      <div id="dropzone">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3v12m0-12l-4 4m4-4l4 4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <div class="title">ลากไฟล์มาวาง หรือคลิกเพื่อเลือก</div>
+        <div class="sub">.xlsx, .xls, .csv</div>
+      </div>
+      <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" />
+      <button id="gdriveBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 2L4 20h16L12 2z" stroke-linejoin="round"/></svg>
+        โหลดจาก Google Drive (sample_branches.xlsx)
+      </button>
+      <div id="gdriveMeta">ดึงข้อมูลล่าสุดเมื่อ: <span id="gdriveTs">ยังไม่เคยโหลด</span></div>
+      <div id="fileMeta"></div>
+      <div id="colMap"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-label"><span class="num">02</span> รัศมีของกลุ่ม (Cluster Radius)</div>
+      <div class="radius-row">
+        <div class="radius-value" id="radiusValue">100<span>เมตร</span></div>
+      </div>
+      <input type="range" id="radiusSlider" min="100" max="1000" step="100" value="100" />
+      <div class="tick-row">
+        <span>100</span><span>300</span><span>500</span><span>700</span><span>1000</span>
+      </div>
+      <div id="ringWrap">
+        <svg id="ringSvg" width="120" height="90" viewBox="0 0 120 90"></svg>
+      </div>
+      <div class="ring-caption">ขนาดวงกลมแสดงรัศมีปัจจุบันโดยเปรียบเทียบ</div>
+    </div>
+
+    <div class="section">
+      <div class="section-label"><span class="num">03</span> รูปแบบการแสดงผล</div>
+      <div class="toggle-group">
+        <div class="toggle-item active" data-mode="bubble">
+          <div class="label"><span class="swatch bubble"></span>บับเบิ้ลจำนวนสาขา</div>
+          <div class="switch"></div>
+        </div>
+        <div class="toggle-item" data-mode="heat">
+          <div class="label"><span class="swatch heat"></span>Heatmap ความหนาแน่น</div>
+          <div class="switch"></div>
+        </div>
+      </div>
+      <div id="legendBox" style="display:none">
+        <div class="bar"></div>
+        <div class="row"><span>เบาบาง</span><span>หนาแน่น</span></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label"><span class="num">04</span> สรุปผล</div>
+      <div class="stat-grid">
+        <div class="stat-card"><div class="v" id="statPoints">0</div><div class="k">จุดพิกัดทั้งหมด</div></div>
+        <div class="stat-card"><div class="v" id="statClusters">0</div><div class="k">จำนวนกลุ่ม</div></div>
+        <div class="stat-card"><div class="v" id="statMax">0</div><div class="k">กลุ่มใหญ่สุด (จุด)</div></div>
+        <div class="stat-card"><div class="v" id="statSolo">0</div><div class="k">จุดเดี่ยว (ไม่รวมกลุ่ม)</div></div>
+      </div>
+      <button id="exportBtn" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Export Cluster เป็น Excel
+      </button>
+    </div>
+
+    <div class="footer-note">
+      รองรับคอลัมน์ชื่อ: <b>lat/latitude/ละติจูด</b>, <b>lng/lon/longitude/ลองจิจูด</b>, และคอลัมน์ชื่อสถานที่ (ถ้ามี) จะถูกตรวจจับอัตโนมัติจากหัวตาราง
+    </div>
+  </div>
+
+  <div id="mapArea">
+    <div id="map"></div>
+    <div id="toast"></div>
+    <div id="emptyState">
+      <div class="card">
+        <h2>ยังไม่มีข้อมูลบนแผนที่</h2>
+        <p>อัปโหลดไฟล์ Excel ที่มีคอลัมน์พิกัด (ละติจูด/ลองจิจูด) ทางด้านซ้ายเพื่อเริ่มจัดกลุ่ม</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================= App State ============================= */
+const state = {
+  points: [],        // {lat, lng, name}
+  radius: 100,        // meters
+  mode: 'bubble',      // 'bubble' | 'heat'
+  clusters: [],
+};
+
+/* ============================= Map Setup ============================= */
+const map = L.map('map', { zoomControl: true, attributionControl: true }).setView([13.7563, 100.5018], 6);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; OpenStreetMap &copy; CARTO',
+  subdomains: 'abcd',
+  maxZoom: 19
+}).addTo(map);
+
+const clusterLayerGroup = L.layerGroup().addTo(map);
+
+/* ============================= Heat Layer (custom, dependency-free) ============================= */
+const HEAT_GRADIENT_STOPS = [
+  [0.0, [10, 20, 60, 0]],
+  [0.25, [59, 130, 246, 160]],
+  [0.5, [34, 211, 238, 200]],
+  [0.72, [163, 230, 53, 220]],
+  [0.86, [242, 169, 59, 235]],
+  [1.0, [226, 89, 107, 255]],
+];
+function buildGradientLUT() {
+  const lut = new Uint8ClampedArray(256 * 4);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    let a = HEAT_GRADIENT_STOPS[0], b = HEAT_GRADIENT_STOPS[HEAT_GRADIENT_STOPS.length - 1];
+    for (let s = 0; s < HEAT_GRADIENT_STOPS.length - 1; s++) {
+      if (t >= HEAT_GRADIENT_STOPS[s][0] && t <= HEAT_GRADIENT_STOPS[s + 1][0]) {
+        a = HEAT_GRADIENT_STOPS[s]; b = HEAT_GRADIENT_STOPS[s + 1]; break;
+      }
+    }
+    const span = (b[0] - a[0]) || 1;
+    const f = Math.min(1, Math.max(0, (t - a[0]) / span));
+    for (let c = 0; c < 4; c++) lut[i * 4 + c] = a[1][c] + (b[1][c] - a[1][c]) * f;
+  }
+  return lut;
+}
+const GRADIENT_LUT = buildGradientLUT();
+
+const HeatLayer = L.Layer.extend({
+  initialize(points, options) {
+    this._points = points || [];
+    this._radiusMeters = (options && options.radiusMeters) || 100;
+    this._stamp = null;
+  },
+  onAdd(mapInst) {
+    this._map = mapInst;
+    this._canvas = L.DomUtil.create('canvas', 'heat-canvas-layer');
+    this._canvas.style.position = 'absolute';
+    this._canvas.style.pointerEvents = 'none';
+    const pane = mapInst.getPanes().overlayPane;
+    pane.appendChild(this._canvas);
+    mapInst.on('moveend zoomend resize', this._reset, this);
+    this._reset();
+  },
+  onRemove(mapInst) {
+    L.DomUtil.remove(this._canvas);
+    mapInst.off('moveend zoomend resize', this._reset, this);
+  },
+  setPoints(points) { this._points = points; this._redraw(); },
+  setRadiusMeters(r) { this._radiusMeters = r; this._redraw(); },
+  _reset() {
+    const size = this._map.getSize();
+    this._canvas.width = size.x;
+    this._canvas.height = size.y;
+    const topLeft = this._map.containerPointToLayerPoint([0, 0]);
+    L.DomUtil.setPosition(this._canvas, topLeft);
+    this._redraw();
+  },
+  _metersToPixels(latlng, meters) {
+    const z = this._map.getZoom();
+    const p1 = this._map.project(latlng, z);
+    const earthR = 6378137;
+    const dLng = (meters / (earthR * Math.cos(Math.PI * latlng.lat / 180))) * (180 / Math.PI);
+    const p2 = this._map.project([latlng.lat, latlng.lng + dLng], z);
+    return Math.max(8, Math.abs(p2.x - p1.x));
+  },
+  _buildStamp(r) {
+    const c = document.createElement('canvas');
+    const d = r * 2;
+    c.width = d; c.height = d;
+    const ctx = c.getContext('2d');
+    const grad = ctx.createRadialGradient(r, r, 0, r, r, r);
+    grad.addColorStop(0, 'rgba(0,0,0,1)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, d, d);
+    return c;
+  },
+  _redraw() {
+    if (!this._map || !this._canvas) return;
+    const ctx = this._canvas.getContext('2d');
+    ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
+    if (!this._points.length) return;
+
+    const off = document.createElement('canvas');
+    off.width = this._canvas.width; off.height = this._canvas.height;
+    const octx = off.getContext('2d');
+
+    const bounds = this._map.getBounds().pad(0.3);
+    let drawn = 0;
+    for (const p of this._points) {
+      if (!bounds.contains([p.lat, p.lng])) continue;
+      const pt = this._map.latLngToContainerPoint([p.lat, p.lng]);
+      const r = this._metersToPixels({ lat: p.lat, lng: p.lng }, this._radiusMeters);
+      const stamp = this._buildStamp(r);
+      octx.globalAlpha = 0.5;
+      octx.drawImage(stamp, pt.x - r, pt.y - r);
+      drawn++;
+    }
+    if (!drawn) return;
+
+    const imgData = octx.getImageData(0, 0, off.width, off.height);
+    const data = imgData.data;
+    for (let i = 3; i < data.length; i += 4) {
+      const alpha = data[i];
+      if (alpha === 0) continue;
+      const lutIdx = alpha * 4;
+      data[i - 3] = GRADIENT_LUT[lutIdx];
+      data[i - 2] = GRADIENT_LUT[lutIdx + 1];
+      data[i - 1] = GRADIENT_LUT[lutIdx + 2];
+      data[i] = GRADIENT_LUT[lutIdx + 3];
+    }
+    octx.putImageData(imgData, 0, 0);
+    ctx.drawImage(off, 0, 0);
+  }
+});
+const heatLayer = new HeatLayer([], { radiusMeters: 100 });
+
+/* ============================= File Parsing ============================= */
+const LAT_KEYS = ['lat', 'latitude', 'ละติจูด', 'y'];
+const LNG_KEYS = ['lng', 'lon', 'long', 'longitude', 'ลองจิจูด', 'x'];
+const NAME_KEYS = ['name', 'ชื่อ', 'ชื่อสาขา', 'สาขา', 'branch', 'store', 'location', 'สถานที่'];
+
+function normHeader(h) { return String(h || '').trim().toLowerCase(); }
+function findColumn(headers, candidates) {
+  for (let i = 0; i < headers.length; i++) {
+    const h = normHeader(headers[i]);
+    if (candidates.some(c => h === c || h.includes(c))) return i;
+  }
+  return -1;
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.display = 'block';
+  clearTimeout(showToast._tid);
+  showToast._tid = setTimeout(() => t.style.display = 'none', 4000);
+}
+
+function handleFile(file) {
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const wb = XLSX.read(data, { type: 'array' });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+      if (!rows.length) { showToast('ไฟล์ว่างเปล่า หรืออ่านข้อมูลไม่ได้'); return; }
+
+      const headers = rows[0];
+      const latIdx = findColumn(headers, LAT_KEYS);
+      const lngIdx = findColumn(headers, LNG_KEYS);
+      const nameIdx = findColumn(headers, NAME_KEYS);
+
+      if (latIdx === -1 || lngIdx === -1) {
+        showToast('ไม่พบคอลัมน์ ละติจูด/ลองจิจูด ในไฟล์นี้');
+        return;
+      }
+
+      const pts = [];
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r];
+        const lat = parseFloat(row[latIdx]);
+        const lng = parseFloat(row[lngIdx]);
+        if (!isFinite(lat) || !isFinite(lng)) continue;
+        if (lat < -90 || lat > 90 || lng < -180 || lng > 180) continue;
+        const name = nameIdx !== -1 && row[nameIdx] ? String(row[nameIdx]) : `จุดที่ ${pts.length + 1}`;
+        pts.push({ lat, lng, name });
+      }
+
+      if (!pts.length) {
+        showToast('ไม่พบพิกัดที่ถูกต้องในไฟล์');
+        return;
+      }
+
+      state.points = pts;
+      document.getElementById('fileMeta').textContent = `${file.name} — ${pts.length.toLocaleString()} จุด`;
+      document.getElementById('fileMeta').classList.add('show');
+
+      const colMapEl = document.getElementById('colMap');
+      colMapEl.innerHTML =
+        `ตรวจพบคอลัมน์: <b>${headers[latIdx]}</b> → ละติจูด, <b>${headers[lngIdx]}</b> → ลองจิจูด` +
+        (nameIdx !== -1 ? `, <b>${headers[nameIdx]}</b> → ชื่อสถานที่` : '');
+      colMapEl.classList.add('show');
+
+      document.getElementById('emptyState').style.display = 'none';
+      fitToPoints(pts);
+      recomputeAndRender();
+    } catch (err) {
+      console.error(err);
+      showToast('อ่านไฟล์ไม่สำเร็จ กรุณาตรวจสอบรูปแบบไฟล์');
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function fitToPoints(pts) {
+  const bounds = L.latLngBounds(pts.map(p => [p.lat, p.lng]));
+  map.fitBounds(bounds.pad(0.15));
+}
+
+/* ============================= Clustering (radius union-find) ============================= */
+function haversine(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+function computeClusters(points, radiusMeters) {
+  const n = points.length;
+  const parent = new Array(n).fill(0).map((_, i) => i);
+  function find(x) { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+  function union(a, b) { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; }
+
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (haversine(points[i].lat, points[i].lng, points[j].lat, points[j].lng) <= radiusMeters) {
+        union(i, j);
+      }
+    }
+  }
+
+  const groups = new Map();
+  for (let i = 0; i < n; i++) {
+    const root = find(i);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(points[i]);
+  }
+
+  const clusters = [];
+  groups.forEach(members => {
+    const lat = members.reduce((s, p) => s + p.lat, 0) / members.length;
+    const lng = members.reduce((s, p) => s + p.lng, 0) / members.length;
+    const withDist = members.map(p => ({
+      ...p,
+      distanceToCenter: Math.round(haversine(p.lat, p.lng, lat, lng)),
+    }));
+    let maxSpread = 0;
+    for (let i = 0; i < members.length; i++) {
+      for (let j = i + 1; j < members.length; j++) {
+        maxSpread = Math.max(maxSpread, haversine(members[i].lat, members[i].lng, members[j].lat, members[j].lng));
+      }
+    }
+    clusters.push({
+      lat, lng,
+      count: members.length,
+      names: withDist.map(p => p.name),
+      members: withDist,
+      maxSpread: Math.round(maxSpread),
+    });
+  });
+  clusters.sort((a, b) => b.count - a.count);
+  clusters.forEach((c, i) => { c.groupNo = i + 1; });
+  return clusters;
+}
+
+/* ============================= Rendering ============================= */
+function pinSize(count, maxCount) {
+  const min = 13, max = 31;
+  if (maxCount <= 1) return min;
+  const t = Math.sqrt(count / maxCount);
+  return Math.round(min + t * (max - min));
+}
+
+function pinColor(count) {
+  if (count >= 4) return { hex: '#e2596b', rgb: '226,89,107' };   // red
+  if (count >= 2) return { hex: '#f2a93b', rgb: '242,169,59' };   // orange
+  return { hex: '#35c9b0', rgb: '53,201,176' };                    // teal (solo points)
+}
+
+function renderBubbles(clusters) {
+  clusterLayerGroup.clearLayers();
+  const maxCount = clusters.length ? clusters[0].count : 1;
+  clusters.forEach(c => {
+    const size = pinSize(c.count, maxCount);
+    const color = pinColor(c.count);
+    const icon = L.divIcon({
+      className: '',
+      html: `<div class="cluster-pin" style="width:${size}px;height:${size}px;font-size:${Math.max(10, size * 0.32)}px;
+        background:rgba(${color.rgb},0.8);
+        box-shadow:0 0 0 4px rgba(${color.rgb},.18), 0 2px 8px rgba(0,0,0,.4);
+        border-color:${color.hex};">${c.count}</div>`,
+      iconSize: [size, size],
+      iconAnchor: [size / 2, size / 2],
+    });
+    const marker = L.marker([c.lat, c.lng], { icon });
+    const shown = c.names.slice(0, 15).join(', ');
+    const extra = c.names.length > 15 ? ` และอีก ${c.names.length - 15} แห่ง` : '';
+    marker.bindPopup(
+      `<div class="popup-title">กลุ่มที่ ${c.groupNo} — ${c.count.toLocaleString()} จุด</div>` +
+      `<div class="popup-body">${shown}${extra}</div>`
+    );
+    marker.addTo(clusterLayerGroup);
+  });
+}
+
+function updateStats(clusters) {
+  document.getElementById('statPoints').textContent = state.points.length.toLocaleString();
+  document.getElementById('statClusters').textContent = clusters.length.toLocaleString();
+  document.getElementById('statMax').textContent = (clusters[0] ? clusters[0].count : 0).toLocaleString();
+  document.getElementById('statSolo').textContent = clusters.filter(c => c.count === 1).length.toLocaleString();
+}
+
+function applyLayerVisibility() {
+  if (state.mode === 'bubble') {
+    if (!map.hasLayer(clusterLayerGroup)) clusterLayerGroup.addTo(map);
+    if (map.hasLayer(heatLayer)) map.removeLayer(heatLayer);
+    document.getElementById('legendBox').style.display = 'none';
+  } else {
+    if (map.hasLayer(clusterLayerGroup)) map.removeLayer(clusterLayerGroup);
+    if (!map.hasLayer(heatLayer)) heatLayer.addTo(map);
+    document.getElementById('legendBox').style.display = 'block';
+  }
+}
+
+function recomputeAndRender() {
+  if (!state.points.length) return;
+  state.clusters = computeClusters(state.points, state.radius);
+  renderBubbles(state.clusters);
+  heatLayer.setPoints(state.points);
+  heatLayer.setRadiusMeters(state.radius);
+  updateStats(state.clusters);
+  applyLayerVisibility();
+  document.getElementById('exportBtn').disabled = false;
+}
+
+/* ============================= Export to Excel ============================= */
+function exportClustersToExcel() {
+  if (!state.clusters.length) return;
+
+  const rows = [];
+  state.clusters.forEach(c => {
+    c.members.forEach(m => {
+      rows.push({
+        'Group': c.groupNo,
+        'ชื่อสาขา': m.name,
+        'ละติจูด': m.lat,
+        'ลองจิจูด': m.lng,
+        'ระยะห่างจากศูนย์กลางกลุ่ม (ม.)': m.distanceToCenter,
+        'จำนวนสาขาในกลุ่ม': c.count,
+        'ระยะกว้างสุดในกลุ่ม (ม.)': c.maxSpread,
+        'ละติจูดศูนย์กลางกลุ่ม': Number(c.lat.toFixed(6)),
+        'ลองจิจูดศูนย์กลางกลุ่ม': Number(c.lng.toFixed(6)),
+        'รัศมีที่ใช้จัดกลุ่ม (ม.)': state.radius,
+      });
+    });
+  });
+
+  const summaryRows = state.clusters.map(c => ({
+    'Group': c.groupNo,
+    'จำนวนสาขาในกลุ่ม': c.count,
+    'ละติจูดศูนย์กลางกลุ่ม': Number(c.lat.toFixed(6)),
+    'ลองจิจูดศูนย์กลางกลุ่ม': Number(c.lng.toFixed(6)),
+    'ระยะกว้างสุดในกลุ่ม (ม.)': c.maxSpread,
+    'รัศมีที่ใช้จัดกลุ่ม (ม.)': state.radius,
+  }));
+
+  const wb = XLSX.utils.book_new();
+  const wsDetail = XLSX.utils.json_to_sheet(rows);
+  const wsSummary = XLSX.utils.json_to_sheet(summaryRows);
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'สรุปกลุ่ม');
+  XLSX.utils.book_append_sheet(wb, wsDetail, 'รายละเอียดทุกจุด');
+
+  const ts = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  const filename = `7-11-stores-cluster_${state.radius}m_${ts.getFullYear()}${pad(ts.getMonth()+1)}${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}.xlsx`;
+  XLSX.writeFile(wb, filename);
+}
+
+document.getElementById('exportBtn').addEventListener('click', exportClustersToExcel);
+
+/* ============================= Radius Ring Signature ============================= */
+function drawRing(radiusMeters) {
+  const svg = document.getElementById('ringSvg');
+  const t = (radiusMeters - 100) / (1000 - 100);
+  const r = 10 + t * 26;
+  svg.innerHTML = `
+    <circle cx="60" cy="45" r="${r}" fill="rgba(53,201,176,.14)" stroke="var(--teal)" stroke-width="1.5"/>
+    <circle cx="60" cy="45" r="2" fill="var(--amber)"/>
+    <text x="60" y="45" text-anchor="middle" dy="-${r + 8}" fill="#8892ab" font-size="9" font-family="var(--mono)">${radiusMeters} ม.</text>
+  `;
+}
+
+/* ============================= Google Drive Snapshot ============================= */
+/* Snapshot pulled on-demand from Google Drive file "sample_branches.xlsx" via the
+   Google Drive connector. This is NOT a live connection — the deployed HTML page
+   cannot authenticate to Google on its own. Re-run the fetch in chat and ask for
+   an updated build whenever the source file changes. */
+const GDRIVE_SNAPSHOT_FETCHED_AT = '2026-08-26 09:45 (Asia/Bangkok)';
+const GDRIVE_SNAPSHOT_SOURCE = 'sample_branches.xlsx (Google Drive)';
+const GDRIVE_SNAPSHOT_POINTS = [{"name": "13040 สบาย ศาลายา", "lat": 13.80261144, "lng": 100.3049951}, {"name": "16519 Property Perfect บางกรวย-ไทรน้อย 40", "lat": 13.82797801, "lng": 100.4720431}, {"name": "5047 อบต.ศาลายา", "lat": 13.82467724, "lng": 100.3147654}, {"name": "18384 PTTOR สามกระบือเผือก (นครปฐม)", "lat": 13.83395132, "lng": 100.1106502}, {"name": "14548 สามแยกท่าอิฐ", "lat": 13.89301044, "lng": 100.4627144}, {"name": "19302 หมู่บ้านดีไลท์ ถนนสำเร็จพัฒนา", "lat": 13.8115938, "lng": 100.3367867}, {"name": "17556 PTTOR ถนนมาลัยแมน กม.19", "lat": 13.94553607, "lng": 100.0038635}, {"name": "11124 ชัยพฤกษ์ (สาย 5)", "lat": 13.79560888, "lng": 100.3031556}, {"name": "9306 เอื้ออาทรซอยพระเงิน", "lat": 13.82031658, "lng": 100.4024651}, {"name": "17300 ชุมชนลำเหย (ดอนตูม)", "lat": 13.95222155, "lng": 100.0462941}, {"name": "6613 สำเร็จพัฒนา จุด 3", "lat": 13.81355699, "lng": 100.3923875}, {"name": "4416 หมู่บ้านธารทอง", "lat": 13.738185, "lng": 100.450922}, {"name": "15893 เรวดี 85", "lat": 13.85861382, "lng": 100.4940601}, {"name": "22692 ไทยาวาส (นครชัยศรี)", "lat": 13.80522405, "lng": 100.2341177}, {"name": "13425 ปตท.มาลัยแมน กม.39", "lat": 14.12280613, "lng": 99.98625778}, {"name": "11937 มนวดี - บ้านกล้วย", "lat": 13.91624549, "lng": 100.3990124}, {"name": "18012 บางเลน 19", "lat": 13.84892555, "lng": 100.4346514}, {"name": "14344 ท่าอิฐ 5", "lat": 13.89626712, "lng": 100.4772945}, {"name": "23028 ชุมชนทุ่งบัว (กำแพงแสน)", "lat": 14.04259834, "lng": 99.95408634}, {"name": "14162 ทวีวัฒนา 23", "lat": 13.76743731, "lng": 100.3448153}, {"name": "13866 ปตท.ม.รสิกา (บางกรวย-ไทรน้อย)", "lat": 13.851551, "lng": 100.437576}, {"name": "16789 ชุมชนดอนยายหอม (นครปฐม)", "lat": 13.73832677, "lng": 100.0820256}, {"name": "13508 พุทธมณฑลสาย 1 ซอย 37", "lat": 13.78661195, "lng": 100.4260393}, {"name": "17170 KU Market (กำแพงแสน)", "lat": 14.02176544, "lng": 99.99406368}, {"name": "7815 หมู่บ้านมนธานี", "lat": 13.82668783, "lng": 100.4795913}, {"name": "15326 หมู่บ้านคิวดิสทริค (จันทร์ทองเอี่ยม)", "lat": 13.89015131, "lng": 100.4249777}, {"name": "11460 เอื้ออาทร สาย 7", "lat": 13.75902162, "lng": 100.2311307}, {"name": "7023 บางม่วง-บางคูลัด จุด 2", "lat": 13.83039515, "lng": 100.4031887}, {"name": "16465 PTTOR วัดลาดปลาดุก", "lat": 13.90897349, "lng": 100.3926876}, {"name": "11172 ปตท.มาลัยแมน กม.5", "lat": 13.85572667, "lng": 100.015468}, {"name": "15608 บ้านไทรม้า", "lat": 13.86951726, "lng": 100.4638959}, {"name": "8732 ราชพฤกษ์ (บางพลับ )", "lat": 13.91780944, "lng": 100.4519128}, {"name": "9002 ตลาดไทรใหญ่", "lat": 13.9770143, "lng": 100.3108847}, {"name": "7247 หมู่บ้านรติรมย์พาร์ค", "lat": 13.80471651, "lng": 100.4289566}, {"name": "5670 สระกะเทียม", "lat": 13.76373467, "lng": 99.9644367}, {"name": "8130 ดอนตูม 2", "lat": 13.96195208, "lng": 100.0808451}, {"name": "11238 ชัยพฤกษ์ ซ.9", "lat": 13.78822712, "lng": 100.4609342}, {"name": "13186 ม.พฤกษา 16", "lat": 13.84027473, "lng": 100.3730255}, {"name": "15836 ชุมชนบ้านหลวง (ดอนตูม)", "lat": 13.91841312, "lng": 100.1470998}, {"name": "10471 Property Perfect Park บางใหญ่", "lat": 13.85673435, "lng": 100.395333}, {"name": "12059 ชุมชนสองห้อง", "lat": 13.92257341, "lng": 100.0656706}, {"name": "17034 ศูนย์การแพทย์กาญจนาภิเษก โซน C", "lat": 13.7865815, "lng": 100.3204009}, {"name": "11335 LPN เพลส บรมราชชนนี - ปิ่นเกล้า", "lat": 13.78502189, "lng": 100.4607497}, {"name": "1404 ส.ภานุรังษี", "lat": 13.805233, "lng": 100.488528}, {"name": "5059 บ้านวังไทร-พระประโทน", "lat": 13.79295807, "lng": 100.0938634}, {"name": "5319 PTTOR บัวทอง", "lat": 13.914721, "lng": 100.422527}, {"name": "10859 ม.ไอนิซิโอ (ซอยสำเร็จพัฒนา)", "lat": 13.81114852, "lng": 100.3423281}, {"name": "22440 จรัญ 45 แยก 3", "lat": 13.77307616, "lng": 100.4784619}, {"name": "13479 ตลาดสำเร็จพัฒนา", "lat": 13.81376883, "lng": 100.3911056}, {"name": "14703 ม.ทาวน์อเวนิว(ซอยวัดมะเดื่อ)", "lat": 13.87388497, "lng": 100.4234517}, {"name": "14635 หมู่บ้านปรารถนา จุด 3", "lat": 13.82441186, "lng": 100.4239064}, {"name": "13938 จุดพักรถปิ่นโต(นครปฐม)", "lat": 13.80248865, "lng": 100.0079951}, {"name": "2826 เจริญสุข", "lat": 13.777067, "lng": 100.477899}, {"name": "15619 รพ.พระนั่งเกล้า", "lat": 13.86530459, "lng": 100.4809443}, {"name": "5061 หมู่บ้านเจ้าพระยา จุด 5", "lat": 13.86057071, "lng": 100.4391406}, {"name": "17767 ชุมชนดอนซาก (กำแพงแสน)", "lat": 13.97215532, "lng": 99.99903239}, {"name": "22925 ชุมชนพะเนียงแตก (ดอนตูม)", "lat": 13.8646416, "lng": 100.0776359}, {"name": "11655 เจนพลัสมอลล์ (สนามหลวง 2)", "lat": 13.74567431, "lng": 100.3548841}, {"name": "23630 จินดา (บ้านแพ้ว) กม.21", "lat": 13.6694276, "lng": 100.0883342}, {"name": "16536 อัจฉริยะพัฒนา 3", "lat": 13.81596713, "lng": 100.4077219}, {"name": "14204 ตลาดพระปิ่น 3", "lat": 13.85872058, "lng": 100.4089752}, {"name": "5957 โพรงมะเดื่อ บ้านไร่ (นครปฐม)", "lat": 13.81745616, "lng": 99.99969055}, {"name": "16038 เทศบาล 1/3 (นครปฐม)", "lat": 13.82065612, "lng": 100.1012018}, {"name": "17036 หมู่บ้านพฤกษา3(ถนนวัดลาดปลาดุก)", "lat": 13.9090513, "lng": 100.3530063}, {"name": "3277 สวนผัก 45", "lat": 13.79055168, "lng": 100.4131411}, {"name": "14358 สามแยกลภาวัล", "lat": 13.92253778, "lng": 100.4379465}, {"name": "18335 ตลาดธีรรัตน์ (ถนนจันทร์ทองเอี่ยม)", "lat": 13.8877583, "lng": 100.4188574}, {"name": "9529 ไทรม้า จุด 2", "lat": 13.86611511, "lng": 100.4675459}, {"name": "19920 ไทรใหญ่ (ถนนบ้านกล้วยไทรน้อย)", "lat": 13.9765697, "lng": 100.3114801}];
+
+function loadFromGDriveSnapshot() {
+  const btn = document.getElementById('gdriveBtn');
+  btn.disabled = true;
+  const original = btn.innerHTML;
+  btn.innerHTML = 'กำลังโหลด...';
+  setTimeout(() => {
+    state.points = GDRIVE_SNAPSHOT_POINTS.map(p => ({ lat: p.lat, lng: p.lng, name: p.name }));
+
+    document.getElementById('fileMeta').textContent = `${GDRIVE_SNAPSHOT_SOURCE} — ${state.points.length.toLocaleString()} จุด`;
+    document.getElementById('fileMeta').classList.add('show');
+    document.getElementById('colMap').classList.remove('show');
+    document.getElementById('gdriveTs').textContent = GDRIVE_SNAPSHOT_FETCHED_AT;
+
+    document.getElementById('emptyState').style.display = 'none';
+    fitToPoints(state.points);
+    recomputeAndRender();
+
+    btn.disabled = false;
+    btn.innerHTML = original;
+  }, 400);
+}
+document.getElementById('gdriveBtn').addEventListener('click', loadFromGDriveSnapshot);
+
+/* ============================= UI Wiring ============================= */
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('fileInput');
+dropzone.addEventListener('click', () => fileInput.click());
+dropzone.addEventListener('dragover', (e) => { e.preventDefault(); dropzone.classList.add('drag'); });
+dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag'));
+dropzone.addEventListener('drop', (e) => {
+  e.preventDefault(); dropzone.classList.remove('drag');
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', (e) => { if (e.target.files.length) handleFile(e.target.files[0]); });
+
+const radiusSlider = document.getElementById('radiusSlider');
+const radiusValueEl = document.getElementById('radiusValue');
+radiusSlider.addEventListener('input', () => {
+  state.radius = parseInt(radiusSlider.value, 10);
+  radiusValueEl.innerHTML = `${state.radius}<span>เมตร</span>`;
+  drawRing(state.radius);
+  recomputeAndRender();
+});
+
+document.querySelectorAll('.toggle-item').forEach(item => {
+  item.addEventListener('click', () => {
+    document.querySelectorAll('.toggle-item').forEach(i => i.classList.remove('active'));
+    item.classList.add('active');
+    state.mode = item.dataset.mode;
+    applyLayerVisibility();
+    if (state.mode === 'heat') heatLayer._redraw();
+  });
+});
+
+drawRing(100);
+</script>
+</body>
+</html>
