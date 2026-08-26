@@ -260,7 +260,7 @@
 
   /* ---------- Map area ---------- */
   #mapArea{ flex:1; position:relative; }
-  #map{ width:100%; height:100%; background:#0d1424; }
+  #map{ width:100%; height:100%; background:#eef1f6; }
   .leaflet-container{ font-family:var(--sans); }
 
   #emptyState{
@@ -281,14 +281,24 @@
     background:var(--teal);
     box-shadow:0 0 0 4px rgba(53,201,176,.18), 0 2px 8px rgba(0,0,0,.4);
     border:2px solid #0a2c26;
+    overflow:hidden; line-height:1; white-space:nowrap;
   }
   .leaflet-popup-content-wrapper{
     background:var(--panel); color:var(--text); border:1px solid var(--border);
     border-radius:10px;
   }
   .leaflet-popup-tip{ background:var(--panel); }
-  .popup-title{ font-weight:700; font-size:13px; margin-bottom:4px; color:var(--teal); }
-  .popup-body{ font-size:12px; color:var(--muted); line-height:1.6; max-height:140px; overflow-y:auto; }
+  .popup-title{ font-weight:700; font-size:13px; margin-bottom:6px; color:var(--teal); }
+  .popup-body{ font-size:12px; color:var(--muted); max-height:220px; overflow-y:auto; min-width:220px; }
+  .popup-row{
+    display:flex; align-items:baseline; gap:6px; flex-wrap:wrap;
+    padding:5px 0; border-bottom:1px solid var(--border);
+  }
+  .popup-row:last-child{ border-bottom:none; }
+  .pm-code{ font-family:var(--mono); color:var(--amber); font-size:11px; flex-shrink:0; }
+  .pm-name{ color:var(--text); font-weight:600; }
+  .pm-extra{ color:var(--muted); font-size:11px; margin-left:auto; white-space:nowrap; }
+  .popup-more{ padding-top:6px; font-size:11px; color:var(--muted); font-style:italic; }
 
   #toast{
     position:absolute; top:16px; left:50%; transform:translateX(-50%);
@@ -453,13 +463,12 @@ const state = {
 
 /* ============================= Map Setup ============================= */
 const map = L.map('map', { zoomControl: true, attributionControl: true }).setView([13.7563, 100.5018], 6);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
   attribution: '&copy; OpenStreetMap &copy; CARTO',
   subdomains: 'abcd',
   maxZoom: 19
 }).addTo(map);
 
-const clusterLayerGroup = L.layerGroup().addTo(map);
 
 /* ============================= Heat Layer (custom, dependency-free) ============================= */
 const HEAT_GRADIENT_STOPS = [
@@ -581,6 +590,109 @@ const HeatLayer = L.Layer.extend({
 });
 const heatLayer = new HeatLayer([], { radiusMeters: 100 });
 
+/* ============================= Bubble Layer (single canvas, circle + label) =============================
+   Always drawn on one shared canvas — regardless of how many clusters there
+   are — so large datasets stay fast AND the count label is never dropped
+   the way it could be with per-marker DOM nodes or plain circleMarkers. */
+const BUBBLE_FONT_STACK = 'ui-monospace, Menlo, Consolas, monospace';
+
+const BubbleLayer = L.Layer.extend({
+  initialize(clusters) {
+    this._clusters = clusters || [];
+    this._hitTargets = [];
+  },
+  onAdd(mapInst) {
+    this._map = mapInst;
+    this._canvas = L.DomUtil.create('canvas', 'bubble-canvas-layer');
+    this._canvas.style.position = 'absolute';
+    this._canvas.style.pointerEvents = 'none'; // map dragging must pass through
+    mapInst.getPanes().overlayPane.appendChild(this._canvas);
+    mapInst.on('moveend zoomend resize', this._reset, this);
+    mapInst.on('click', this._onClick, this);
+    this._reset();
+  },
+  onRemove(mapInst) {
+    L.DomUtil.remove(this._canvas);
+    mapInst.off('moveend zoomend resize', this._reset, this);
+    mapInst.off('click', this._onClick, this);
+  },
+  setClusters(clusters) { this._clusters = clusters; this._redraw(); },
+  _reset() {
+    const size = this._map.getSize();
+    this._canvas.width = size.x;
+    this._canvas.height = size.y;
+    const topLeft = this._map.containerPointToLayerPoint([0, 0]);
+    L.DomUtil.setPosition(this._canvas, topLeft);
+    this._redraw();
+  },
+  _redraw() {
+    if (!this._map || !this._canvas) return;
+    const ctx = this._canvas.getContext('2d');
+    ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
+    this._hitTargets = [];
+    if (!this._clusters.length) return;
+
+    const bounds = this._map.getBounds().pad(0.2);
+    const zf = zoomScaleFactor(this._map.getZoom());
+    const maxCount = this._clusters[0] ? this._clusters[0].count : 1;
+
+    for (const c of this._clusters) {
+      if (!bounds.contains([c.lat, c.lng])) continue;
+      const pt = this._map.latLngToContainerPoint([c.lat, c.lng]);
+      const baseSize = pinSize(c.count, maxCount);
+      const size = Math.max(14, Math.round(baseSize * zf));
+      const r = size / 2;
+      const color = pinColor(c.count);
+
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(${color.rgb},0.5)`;
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = color.hex;
+      ctx.globalAlpha = 0.9;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+
+      const fontSize = Math.min(22, Math.max(9, size * 0.42));
+      ctx.font = `700 ${fontSize}px ${BUBBLE_FONT_STACK}`;
+      ctx.fillStyle = '#04150f';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(c.count), pt.x, pt.y + 1);
+
+      this._hitTargets.push({ x: pt.x, y: pt.y, r, cluster: c });
+    }
+  },
+  _onClick(e) {
+    if (!this._hitTargets.length) return;
+    const pt = this._map.latLngToContainerPoint(e.latlng);
+    for (let i = this._hitTargets.length - 1; i >= 0; i--) {
+      const t = this._hitTargets[i];
+      const dx = pt.x - t.x, dy = pt.y - t.y;
+      if (dx * dx + dy * dy <= t.r * t.r) {
+        this._openPopupFor(t.cluster);
+        return;
+      }
+    }
+  },
+  _openPopupFor(c) {
+    const memberRows = c.members.slice(0, 30).map(m => {
+      const codePrefix = m.code ? `<span class="pm-code">${escapeHtml(m.code)}</span>` : '';
+      const extras = [m.area, m.sla ? `SLA ${m.sla}` : ''].filter(Boolean).join(' · ');
+      return `<div class="popup-row">${codePrefix}<span class="pm-name">${escapeHtml(m.name)}</span>${extras ? `<span class="pm-extra">${escapeHtml(extras)}</span>` : ''}</div>`;
+    });
+    const shown = memberRows.join('');
+    const extra = c.members.length > 30 ? `<div class="popup-more">และอีก ${c.members.length - 30} แห่ง</div>` : '';
+    const html =
+      `<div class="popup-title">กลุ่มที่ ${c.groupNo} — ${c.count.toLocaleString()} จุด</div>` +
+      `<div class="popup-body">${shown}${extra}</div>`;
+    L.popup({ maxWidth: 300 }).setLatLng([c.lat, c.lng]).setContent(html).openOn(this._map);
+  },
+});
+const bubbleLayer = new BubbleLayer([]);
+bubbleLayer.addTo(map);
+
 /* ============================= File Parsing ============================= */
 const CODE_KEYS = ['รหัสสาขา', 'รหัส', 'code', 'store code', 'branch code', 'sap code', 'id'];
 const LAT_KEYS = ['lat', 'latitude', 'ละติจูด', 'y'];
@@ -607,12 +719,36 @@ function slaBucketOf(minutes) {
 }
 
 function normHeader(h) { return String(h || '').trim().toLowerCase(); }
-function findColumn(headers, candidates) {
-  for (let i = 0; i < headers.length; i++) {
-    const h = normHeader(headers[i]);
-    if (candidates.some(c => h === c || h.includes(c))) return i;
+function findColumn(headers, candidates, excludeIndices = []) {
+  const normed = headers.map(normHeader);
+  const isExcluded = (i) => excludeIndices.includes(i);
+
+  // 1) exact match — most reliable, checked first across all headers
+  for (let i = 0; i < normed.length; i++) {
+    if (isExcluded(i)) continue;
+    if (candidates.includes(normed[i])) return i;
+  }
+  // 2) header starts with a candidate word (e.g. "ชื่อสาขา 2")
+  for (let i = 0; i < normed.length; i++) {
+    if (isExcluded(i)) continue;
+    if (candidates.some(c => normed[i].startsWith(c))) return i;
+  }
+  // 3) substring match — last resort, most prone to false positives
+  //    (e.g. "รหัสสาขา" contains "สาขา"), so it only runs after the
+  //    stricter passes above have had first pick across every column.
+  for (let i = 0; i < normed.length; i++) {
+    if (isExcluded(i)) continue;
+    if (candidates.some(c => normed[i].includes(c))) return i;
   }
   return -1;
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function showToast(msg) {
@@ -628,11 +764,11 @@ function parseWorkbookRows(rows, sourceLabel) {
 
   const headers = rows[0];
   const codeIdx = findColumn(headers, CODE_KEYS);
-  const latIdx = findColumn(headers, LAT_KEYS);
-  const lngIdx = findColumn(headers, LNG_KEYS);
-  const nameIdx = findColumn(headers, NAME_KEYS);
-  const areaIdx = findColumn(headers, AREA_KEYS);
-  const slaIdx = findColumn(headers, SLA_KEYS);
+  const latIdx = findColumn(headers, LAT_KEYS, [codeIdx].filter(i => i !== -1));
+  const lngIdx = findColumn(headers, LNG_KEYS, [codeIdx, latIdx].filter(i => i !== -1));
+  const nameIdx = findColumn(headers, NAME_KEYS, [codeIdx, latIdx, lngIdx].filter(i => i !== -1));
+  const areaIdx = findColumn(headers, AREA_KEYS, [codeIdx, latIdx, lngIdx, nameIdx].filter(i => i !== -1));
+  const slaIdx = findColumn(headers, SLA_KEYS, [codeIdx, latIdx, lngIdx, nameIdx, areaIdx].filter(i => i !== -1));
 
   if (latIdx === -1 || lngIdx === -1) {
     showToast('ไม่พบคอลัมน์ ละติจูด/ลองจิจูด ในไฟล์นี้');
@@ -920,10 +1056,18 @@ document.getElementById('slaClearAll').addEventListener('click', () => {
 
 /* ============================= Rendering ============================= */
 function pinSize(count, maxCount) {
-  const min = 13, max = 31;
+  const min = 8, max = 19;
   if (maxCount <= 1) return min;
   const t = Math.sqrt(count / maxCount);
   return Math.round(min + t * (max - min));
+}
+
+// Bubbles are defined at a reference zoom, then scaled up/down as the map
+// zooms so the number inside stays legible instead of being clipped at a
+// fixed pixel size.
+const ZOOM_REFERENCE = 11;
+function zoomScaleFactor(zoom) {
+  return Math.min(3, Math.max(0.55, Math.pow(1.18, zoom - ZOOM_REFERENCE)));
 }
 
 function pinColor(count) {
@@ -932,55 +1076,10 @@ function pinColor(count) {
   return { hex: '#35c9b0', rgb: '53,201,176' };                    // teal (solo points)
 }
 
-const canvasRenderer = L.canvas({ padding: 0.5 });
-const DOM_MARKER_LIMIT = 1500; // above this, switch to lightweight canvas circle markers
-
 function renderBubbles(clusters) {
-  clusterLayerGroup.clearLayers();
-  const maxCount = clusters.length ? clusters[0].count : 1;
-  const useCanvas = clusters.length > DOM_MARKER_LIMIT;
-
-  clusters.forEach(c => {
-    const size = pinSize(c.count, maxCount);
-    const color = pinColor(c.count);
-    const memberLines = c.members.slice(0, 15).map(m => {
-      const codePrefix = m.code ? `${m.code} - ` : '';
-      const extras = [m.area, m.sla ? `SLA ${m.sla}` : ''].filter(Boolean).join(' · ');
-      return extras ? `${codePrefix}${m.name} (${extras})` : `${codePrefix}${m.name}`;
-    });
-    const shown = memberLines.join(', ');
-    const extra = c.members.length > 15 ? ` และอีก ${c.members.length - 15} แห่ง` : '';
-    const popupHtml =
-      `<div class="popup-title">กลุ่มที่ ${c.groupNo} — ${c.count.toLocaleString()} จุด</div>` +
-      `<div class="popup-body">${shown}${extra}</div>`;
-
-    let marker;
-    if (useCanvas) {
-      // Canvas circle markers: no per-marker DOM node, scales to many thousands.
-      marker = L.circleMarker([c.lat, c.lng], {
-        renderer: canvasRenderer,
-        radius: size / 2,
-        fillColor: color.hex,
-        fillOpacity: 0.8,
-        color: color.hex,
-        weight: 1,
-        opacity: 0.5,
-      });
-    } else {
-      const icon = L.divIcon({
-        className: '',
-        html: `<div class="cluster-pin" style="width:${size}px;height:${size}px;font-size:${Math.max(10, size * 0.32)}px;
-          background:rgba(${color.rgb},0.8);
-          box-shadow:0 0 0 4px rgba(${color.rgb},.18), 0 2px 8px rgba(0,0,0,.4);
-          border-color:${color.hex};">${c.count}</div>`,
-        iconSize: [size, size],
-        iconAnchor: [size / 2, size / 2],
-      });
-      marker = L.marker([c.lat, c.lng], { icon });
-    }
-    marker.bindPopup(popupHtml);
-    marker.addTo(clusterLayerGroup);
-  });
+  // All drawing/interaction now lives in BubbleLayer — one shared canvas
+  // regardless of dataset size, so the count label never silently drops.
+  bubbleLayer.setClusters(clusters);
 }
 
 function updateStats(clusters) {
@@ -995,11 +1094,11 @@ function updateStats(clusters) {
 
 function applyLayerVisibility() {
   if (state.mode === 'bubble') {
-    if (!map.hasLayer(clusterLayerGroup)) clusterLayerGroup.addTo(map);
+    if (!map.hasLayer(bubbleLayer)) bubbleLayer.addTo(map);
     if (map.hasLayer(heatLayer)) map.removeLayer(heatLayer);
     document.getElementById('legendBox').style.display = 'none';
   } else {
-    if (map.hasLayer(clusterLayerGroup)) map.removeLayer(clusterLayerGroup);
+    if (map.hasLayer(bubbleLayer)) map.removeLayer(bubbleLayer);
     if (!map.hasLayer(heatLayer)) heatLayer.addTo(map);
     document.getElementById('legendBox').style.display = 'block';
   }
@@ -1009,7 +1108,7 @@ function recomputeAndRender() {
   if (!state.allPoints.length) { hideLoading(); return; }
   if (!state.points.length) {
     state.clusters = [];
-    clusterLayerGroup.clearLayers();
+    bubbleLayer.setClusters([]);
     heatLayer.setPoints([]);
     updateStats([]);
     document.getElementById('exportBtn').disabled = true;
@@ -1201,6 +1300,7 @@ document.querySelectorAll('.toggle-item').forEach(item => {
 });
 
 drawRing(100);
+
 </script>
 </body>
 </html>
