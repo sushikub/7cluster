@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   :root{
     --bg: #0a0f1a;
@@ -301,9 +302,9 @@
       <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" />
       <button id="gdriveBtn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 2L4 20h16L12 2z" stroke-linejoin="round"/></svg>
-        โหลดจาก Google Drive (sample_branches.xlsx)
+        Sync ข้อมูลล่าสุดจาก Google Drive
       </button>
-      <div id="gdriveMeta">ดึงข้อมูลล่าสุดเมื่อ: <span id="gdriveTs">ยังไม่เคยโหลด</span></div>
+      <div id="gdriveMeta">Sync ล่าสุด: <span id="gdriveTs">ยังไม่เคย sync</span></div>
       <div id="fileMeta"></div>
       <div id="colMap"></div>
     </div>
@@ -530,6 +531,51 @@ function showToast(msg) {
   showToast._tid = setTimeout(() => t.style.display = 'none', 4000);
 }
 
+function parseWorkbookRows(rows, sourceLabel) {
+  if (!rows.length) { showToast('ไฟล์ว่างเปล่า หรืออ่านข้อมูลไม่ได้'); return false; }
+
+  const headers = rows[0];
+  const latIdx = findColumn(headers, LAT_KEYS);
+  const lngIdx = findColumn(headers, LNG_KEYS);
+  const nameIdx = findColumn(headers, NAME_KEYS);
+
+  if (latIdx === -1 || lngIdx === -1) {
+    showToast('ไม่พบคอลัมน์ ละติจูด/ลองจิจูด ในไฟล์นี้');
+    return false;
+  }
+
+  const pts = [];
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    const lat = parseFloat(row[latIdx]);
+    const lng = parseFloat(row[lngIdx]);
+    if (!isFinite(lat) || !isFinite(lng)) continue;
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) continue;
+    const name = nameIdx !== -1 && row[nameIdx] ? String(row[nameIdx]) : `จุดที่ ${pts.length + 1}`;
+    pts.push({ lat, lng, name });
+  }
+
+  if (!pts.length) {
+    showToast('ไม่พบพิกัดที่ถูกต้องในไฟล์');
+    return false;
+  }
+
+  state.points = pts;
+  document.getElementById('fileMeta').textContent = `${sourceLabel} — ${pts.length.toLocaleString()} จุด`;
+  document.getElementById('fileMeta').classList.add('show');
+
+  const colMapEl = document.getElementById('colMap');
+  colMapEl.innerHTML =
+    `ตรวจพบคอลัมน์: <b>${headers[latIdx]}</b> → ละติจูด, <b>${headers[lngIdx]}</b> → ลองจิจูด` +
+    (nameIdx !== -1 ? `, <b>${headers[nameIdx]}</b> → ชื่อสถานที่` : '');
+  colMapEl.classList.add('show');
+
+  document.getElementById('emptyState').style.display = 'none';
+  fitToPoints(pts);
+  recomputeAndRender();
+  return true;
+}
+
 function handleFile(file) {
   const reader = new FileReader();
   reader.onload = (e) => {
@@ -538,47 +584,7 @@ function handleFile(file) {
       const wb = XLSX.read(data, { type: 'array' });
       const sheet = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-      if (!rows.length) { showToast('ไฟล์ว่างเปล่า หรืออ่านข้อมูลไม่ได้'); return; }
-
-      const headers = rows[0];
-      const latIdx = findColumn(headers, LAT_KEYS);
-      const lngIdx = findColumn(headers, LNG_KEYS);
-      const nameIdx = findColumn(headers, NAME_KEYS);
-
-      if (latIdx === -1 || lngIdx === -1) {
-        showToast('ไม่พบคอลัมน์ ละติจูด/ลองจิจูด ในไฟล์นี้');
-        return;
-      }
-
-      const pts = [];
-      for (let r = 1; r < rows.length; r++) {
-        const row = rows[r];
-        const lat = parseFloat(row[latIdx]);
-        const lng = parseFloat(row[lngIdx]);
-        if (!isFinite(lat) || !isFinite(lng)) continue;
-        if (lat < -90 || lat > 90 || lng < -180 || lng > 180) continue;
-        const name = nameIdx !== -1 && row[nameIdx] ? String(row[nameIdx]) : `จุดที่ ${pts.length + 1}`;
-        pts.push({ lat, lng, name });
-      }
-
-      if (!pts.length) {
-        showToast('ไม่พบพิกัดที่ถูกต้องในไฟล์');
-        return;
-      }
-
-      state.points = pts;
-      document.getElementById('fileMeta').textContent = `${file.name} — ${pts.length.toLocaleString()} จุด`;
-      document.getElementById('fileMeta').classList.add('show');
-
-      const colMapEl = document.getElementById('colMap');
-      colMapEl.innerHTML =
-        `ตรวจพบคอลัมน์: <b>${headers[latIdx]}</b> → ละติจูด, <b>${headers[lngIdx]}</b> → ลองจิจูด` +
-        (nameIdx !== -1 ? `, <b>${headers[nameIdx]}</b> → ชื่อสถานที่` : '');
-      colMapEl.classList.add('show');
-
-      document.getElementById('emptyState').style.display = 'none';
-      fitToPoints(pts);
-      recomputeAndRender();
+      parseWorkbookRows(rows, file.name);
     } catch (err) {
       console.error(err);
       showToast('อ่านไฟล์ไม่สำเร็จ กรุณาตรวจสอบรูปแบบไฟล์');
@@ -778,37 +784,85 @@ function drawRing(radiusMeters) {
   `;
 }
 
-/* ============================= Google Drive Snapshot ============================= */
-/* Snapshot pulled on-demand from Google Drive file "sample_branches.xlsx" via the
-   Google Drive connector. This is NOT a live connection — the deployed HTML page
-   cannot authenticate to Google on its own. Re-run the fetch in chat and ask for
-   an updated build whenever the source file changes. */
-const GDRIVE_SNAPSHOT_FETCHED_AT = '2026-08-26 09:45 (Asia/Bangkok)';
-const GDRIVE_SNAPSHOT_SOURCE = 'sample_branches.xlsx (Google Drive)';
-const GDRIVE_SNAPSHOT_POINTS = [{"name": "13040 สบาย ศาลายา", "lat": 13.80261144, "lng": 100.3049951}, {"name": "16519 Property Perfect บางกรวย-ไทรน้อย 40", "lat": 13.82797801, "lng": 100.4720431}, {"name": "5047 อบต.ศาลายา", "lat": 13.82467724, "lng": 100.3147654}, {"name": "18384 PTTOR สามกระบือเผือก (นครปฐม)", "lat": 13.83395132, "lng": 100.1106502}, {"name": "14548 สามแยกท่าอิฐ", "lat": 13.89301044, "lng": 100.4627144}, {"name": "19302 หมู่บ้านดีไลท์ ถนนสำเร็จพัฒนา", "lat": 13.8115938, "lng": 100.3367867}, {"name": "17556 PTTOR ถนนมาลัยแมน กม.19", "lat": 13.94553607, "lng": 100.0038635}, {"name": "11124 ชัยพฤกษ์ (สาย 5)", "lat": 13.79560888, "lng": 100.3031556}, {"name": "9306 เอื้ออาทรซอยพระเงิน", "lat": 13.82031658, "lng": 100.4024651}, {"name": "17300 ชุมชนลำเหย (ดอนตูม)", "lat": 13.95222155, "lng": 100.0462941}, {"name": "6613 สำเร็จพัฒนา จุด 3", "lat": 13.81355699, "lng": 100.3923875}, {"name": "4416 หมู่บ้านธารทอง", "lat": 13.738185, "lng": 100.450922}, {"name": "15893 เรวดี 85", "lat": 13.85861382, "lng": 100.4940601}, {"name": "22692 ไทยาวาส (นครชัยศรี)", "lat": 13.80522405, "lng": 100.2341177}, {"name": "13425 ปตท.มาลัยแมน กม.39", "lat": 14.12280613, "lng": 99.98625778}, {"name": "11937 มนวดี - บ้านกล้วย", "lat": 13.91624549, "lng": 100.3990124}, {"name": "18012 บางเลน 19", "lat": 13.84892555, "lng": 100.4346514}, {"name": "14344 ท่าอิฐ 5", "lat": 13.89626712, "lng": 100.4772945}, {"name": "23028 ชุมชนทุ่งบัว (กำแพงแสน)", "lat": 14.04259834, "lng": 99.95408634}, {"name": "14162 ทวีวัฒนา 23", "lat": 13.76743731, "lng": 100.3448153}, {"name": "13866 ปตท.ม.รสิกา (บางกรวย-ไทรน้อย)", "lat": 13.851551, "lng": 100.437576}, {"name": "16789 ชุมชนดอนยายหอม (นครปฐม)", "lat": 13.73832677, "lng": 100.0820256}, {"name": "13508 พุทธมณฑลสาย 1 ซอย 37", "lat": 13.78661195, "lng": 100.4260393}, {"name": "17170 KU Market (กำแพงแสน)", "lat": 14.02176544, "lng": 99.99406368}, {"name": "7815 หมู่บ้านมนธานี", "lat": 13.82668783, "lng": 100.4795913}, {"name": "15326 หมู่บ้านคิวดิสทริค (จันทร์ทองเอี่ยม)", "lat": 13.89015131, "lng": 100.4249777}, {"name": "11460 เอื้ออาทร สาย 7", "lat": 13.75902162, "lng": 100.2311307}, {"name": "7023 บางม่วง-บางคูลัด จุด 2", "lat": 13.83039515, "lng": 100.4031887}, {"name": "16465 PTTOR วัดลาดปลาดุก", "lat": 13.90897349, "lng": 100.3926876}, {"name": "11172 ปตท.มาลัยแมน กม.5", "lat": 13.85572667, "lng": 100.015468}, {"name": "15608 บ้านไทรม้า", "lat": 13.86951726, "lng": 100.4638959}, {"name": "8732 ราชพฤกษ์ (บางพลับ )", "lat": 13.91780944, "lng": 100.4519128}, {"name": "9002 ตลาดไทรใหญ่", "lat": 13.9770143, "lng": 100.3108847}, {"name": "7247 หมู่บ้านรติรมย์พาร์ค", "lat": 13.80471651, "lng": 100.4289566}, {"name": "5670 สระกะเทียม", "lat": 13.76373467, "lng": 99.9644367}, {"name": "8130 ดอนตูม 2", "lat": 13.96195208, "lng": 100.0808451}, {"name": "11238 ชัยพฤกษ์ ซ.9", "lat": 13.78822712, "lng": 100.4609342}, {"name": "13186 ม.พฤกษา 16", "lat": 13.84027473, "lng": 100.3730255}, {"name": "15836 ชุมชนบ้านหลวง (ดอนตูม)", "lat": 13.91841312, "lng": 100.1470998}, {"name": "10471 Property Perfect Park บางใหญ่", "lat": 13.85673435, "lng": 100.395333}, {"name": "12059 ชุมชนสองห้อง", "lat": 13.92257341, "lng": 100.0656706}, {"name": "17034 ศูนย์การแพทย์กาญจนาภิเษก โซน C", "lat": 13.7865815, "lng": 100.3204009}, {"name": "11335 LPN เพลส บรมราชชนนี - ปิ่นเกล้า", "lat": 13.78502189, "lng": 100.4607497}, {"name": "1404 ส.ภานุรังษี", "lat": 13.805233, "lng": 100.488528}, {"name": "5059 บ้านวังไทร-พระประโทน", "lat": 13.79295807, "lng": 100.0938634}, {"name": "5319 PTTOR บัวทอง", "lat": 13.914721, "lng": 100.422527}, {"name": "10859 ม.ไอนิซิโอ (ซอยสำเร็จพัฒนา)", "lat": 13.81114852, "lng": 100.3423281}, {"name": "22440 จรัญ 45 แยก 3", "lat": 13.77307616, "lng": 100.4784619}, {"name": "13479 ตลาดสำเร็จพัฒนา", "lat": 13.81376883, "lng": 100.3911056}, {"name": "14703 ม.ทาวน์อเวนิว(ซอยวัดมะเดื่อ)", "lat": 13.87388497, "lng": 100.4234517}, {"name": "14635 หมู่บ้านปรารถนา จุด 3", "lat": 13.82441186, "lng": 100.4239064}, {"name": "13938 จุดพักรถปิ่นโต(นครปฐม)", "lat": 13.80248865, "lng": 100.0079951}, {"name": "2826 เจริญสุข", "lat": 13.777067, "lng": 100.477899}, {"name": "15619 รพ.พระนั่งเกล้า", "lat": 13.86530459, "lng": 100.4809443}, {"name": "5061 หมู่บ้านเจ้าพระยา จุด 5", "lat": 13.86057071, "lng": 100.4391406}, {"name": "17767 ชุมชนดอนซาก (กำแพงแสน)", "lat": 13.97215532, "lng": 99.99903239}, {"name": "22925 ชุมชนพะเนียงแตก (ดอนตูม)", "lat": 13.8646416, "lng": 100.0776359}, {"name": "11655 เจนพลัสมอลล์ (สนามหลวง 2)", "lat": 13.74567431, "lng": 100.3548841}, {"name": "23630 จินดา (บ้านแพ้ว) กม.21", "lat": 13.6694276, "lng": 100.0883342}, {"name": "16536 อัจฉริยะพัฒนา 3", "lat": 13.81596713, "lng": 100.4077219}, {"name": "14204 ตลาดพระปิ่น 3", "lat": 13.85872058, "lng": 100.4089752}, {"name": "5957 โพรงมะเดื่อ บ้านไร่ (นครปฐม)", "lat": 13.81745616, "lng": 99.99969055}, {"name": "16038 เทศบาล 1/3 (นครปฐม)", "lat": 13.82065612, "lng": 100.1012018}, {"name": "17036 หมู่บ้านพฤกษา3(ถนนวัดลาดปลาดุก)", "lat": 13.9090513, "lng": 100.3530063}, {"name": "3277 สวนผัก 45", "lat": 13.79055168, "lng": 100.4131411}, {"name": "14358 สามแยกลภาวัล", "lat": 13.92253778, "lng": 100.4379465}, {"name": "18335 ตลาดธีรรัตน์ (ถนนจันทร์ทองเอี่ยม)", "lat": 13.8877583, "lng": 100.4188574}, {"name": "9529 ไทรม้า จุด 2", "lat": 13.86611511, "lng": 100.4675459}, {"name": "19920 ไทรใหญ่ (ถนนบ้านกล้วยไทรน้อย)", "lat": 13.9765697, "lng": 100.3114801}];
+/* ============================= Google Drive Live Sync (OAuth) ============================= */
+const GOOGLE_OAUTH_CLIENT_ID = '487877896683-ohddk0lclr968p80gmkkfu2k2vqo9s7m.apps.googleusercontent.com';
+const GOOGLE_DRIVE_FILE_ID = '1Wcr0Qnn64_-UIkjbQtRw6VJRee3o8W1S'; // sample_branches.xlsx
+const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.readonly';
 
-function loadFromGDriveSnapshot() {
-  const btn = document.getElementById('gdriveBtn');
-  btn.disabled = true;
-  const original = btn.innerHTML;
-  btn.innerHTML = 'กำลังโหลด...';
-  setTimeout(() => {
-    state.points = GDRIVE_SNAPSHOT_POINTS.map(p => ({ lat: p.lat, lng: p.lng, name: p.name }));
+let gsiTokenClient = null;
 
-    document.getElementById('fileMeta').textContent = `${GDRIVE_SNAPSHOT_SOURCE} — ${state.points.length.toLocaleString()} จุด`;
-    document.getElementById('fileMeta').classList.add('show');
-    document.getElementById('colMap').classList.remove('show');
-    document.getElementById('gdriveTs').textContent = GDRIVE_SNAPSHOT_FETCHED_AT;
-
-    document.getElementById('emptyState').style.display = 'none';
-    fitToPoints(state.points);
-    recomputeAndRender();
-
-    btn.disabled = false;
-    btn.innerHTML = original;
-  }, 400);
+function initGoogleAuth() {
+  if (!window.google || !google.accounts || !google.accounts.oauth2) {
+    setTimeout(initGoogleAuth, 300);
+    return;
+  }
+  gsiTokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: GOOGLE_OAUTH_CLIENT_ID,
+    scope: GOOGLE_DRIVE_SCOPE,
+    callback: '', // set per-request below
+  });
 }
-document.getElementById('gdriveBtn').addEventListener('click', loadFromGDriveSnapshot);
+initGoogleAuth();
+
+function setSyncBusy(isBusy, label) {
+  const btn = document.getElementById('gdriveBtn');
+  btn.disabled = isBusy;
+  btn.dataset.originalHtml = btn.dataset.originalHtml || btn.innerHTML;
+  btn.innerHTML = isBusy
+    ? label
+    : btn.dataset.originalHtml;
+}
+
+async function fetchDriveFileAsRows(accessToken) {
+  const url = `https://www.googleapis.com/drive/v3/files/${GOOGLE_DRIVE_FILE_ID}?alt=media`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!res.ok) {
+    if (res.status === 403 || res.status === 401) {
+      throw new Error('ไม่มีสิทธิ์เข้าถึงไฟล์นี้ กรุณาตรวจสอบว่าไฟล์แชร์ให้บัญชีที่ล็อกอินอยู่');
+    }
+    throw new Error(`ดึงไฟล์ไม่สำเร็จ (HTTP ${res.status})`);
+  }
+  const buffer = await res.arrayBuffer();
+  const wb = XLSX.read(new Uint8Array(buffer), { type: 'array' });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  return XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+}
+
+function syncFromGoogleDrive() {
+  if (!gsiTokenClient) {
+    showToast('ระบบ Google Sign-in ยังโหลดไม่เสร็จ ลองใหม่อีกครั้ง');
+    return;
+  }
+  setSyncBusy(true, 'กำลังขอสิทธิ์เข้าถึง...');
+
+  gsiTokenClient.callback = async (tokenResponse) => {
+    if (tokenResponse.error) {
+      setSyncBusy(false);
+      showToast('การ Sign-in ถูกยกเลิก หรือไม่สำเร็จ');
+      return;
+    }
+    try {
+      setSyncBusy(true, 'กำลังดึงข้อมูล...');
+      const rows = await fetchDriveFileAsRows(tokenResponse.access_token);
+      const ok = parseWorkbookRows(rows, 'sample_branches.xlsx (Google Drive — live)');
+      if (ok) {
+        const now = new Date();
+        const pad = n => String(n).padStart(2, '0');
+        document.getElementById('gdriveTs').textContent =
+          `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+      }
+    } catch (err) {
+      console.error(err);
+      showToast(err.message || 'Sync ข้อมูลไม่สำเร็จ');
+    } finally {
+      setSyncBusy(false);
+    }
+  };
+
+  // Force the account/consent screen every click, per security preference.
+  gsiTokenClient.requestAccessToken({ prompt: 'consent' });
+}
+document.getElementById('gdriveBtn').addEventListener('click', syncFromGoogleDrive);
 
 /* ============================= UI Wiring ============================= */
 const dropzone = document.getElementById('dropzone');
