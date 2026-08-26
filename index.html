@@ -218,6 +218,32 @@
   #exportBtn:active:not(:disabled){ transform:translateY(1px); }
   #exportBtn:disabled{ background:var(--border); color:var(--muted); cursor:not-allowed; }
 
+  .area-actions{
+    display:flex; gap:8px; margin-bottom:10px;
+  }
+  .area-actions button{
+    flex:1; background:var(--panel-2); border:1px solid var(--border);
+    color:var(--muted); font-family:var(--sans); font-size:11px; font-weight:600;
+    padding:6px 8px; border-radius:6px; cursor:pointer;
+    transition:border-color .15s, color .15s;
+  }
+  .area-actions button:hover{ border-color:var(--teal); color:var(--text); }
+  #areaChecklist{
+    max-height:190px; overflow-y:auto;
+    display:flex; flex-direction:column; gap:2px;
+    background:var(--panel-2); border:1px solid var(--border); border-radius:8px;
+    padding:6px;
+  }
+  .area-item{
+    display:flex; align-items:center; gap:8px;
+    padding:6px 8px; border-radius:6px; cursor:pointer;
+    font-size:12.5px;
+    transition:background .12s;
+  }
+  .area-item:hover{ background:rgba(53,201,176,.08); }
+  .area-item input{ accent-color: var(--teal); width:14px; height:14px; cursor:pointer; flex-shrink:0; }
+  .area-item .cnt{ margin-left:auto; font-family:var(--mono); color:var(--muted); font-size:10.5px; }
+
   #legendBox{ margin-top:12px; }
   #legendBox .bar{
     height:8px; border-radius:4px;
@@ -309,8 +335,26 @@
       <div id="colMap"></div>
     </div>
 
+    <div class="section" id="areaSection" style="display:none">
+      <div class="section-label"><span class="num">02</span> กรองตามพื้นที่</div>
+      <div class="area-actions">
+        <button type="button" id="areaSelectAll">เลือกทั้งหมด</button>
+        <button type="button" id="areaClearAll">ล้างทั้งหมด</button>
+      </div>
+      <div id="areaChecklist"></div>
+    </div>
+
+    <div class="section" id="slaSection" style="display:none">
+      <div class="section-label"><span class="num">03</span> กรองตามเวลาจัดส่ง (SLA)</div>
+      <div class="area-actions">
+        <button type="button" id="slaSelectAll">เลือกทั้งหมด</button>
+        <button type="button" id="slaClearAll">ล้างทั้งหมด</button>
+      </div>
+      <div id="slaChecklist"></div>
+    </div>
+
     <div class="section">
-      <div class="section-label"><span class="num">02</span> รัศมีของกลุ่ม (Cluster Radius)</div>
+      <div class="section-label"><span class="num">04</span> รัศมีของกลุ่ม (Cluster Radius)</div>
       <div class="radius-row">
         <div class="radius-value" id="radiusValue">100<span>เมตร</span></div>
       </div>
@@ -325,7 +369,7 @@
     </div>
 
     <div class="section">
-      <div class="section-label"><span class="num">03</span> รูปแบบการแสดงผล</div>
+      <div class="section-label"><span class="num">05</span> รูปแบบการแสดงผล</div>
       <div class="toggle-group">
         <div class="toggle-item active" data-mode="bubble">
           <div class="label"><span class="swatch bubble"></span>บับเบิ้ลจำนวนสาขา</div>
@@ -343,7 +387,7 @@
     </div>
 
     <div class="section">
-      <div class="section-label"><span class="num">04</span> สรุปผล</div>
+      <div class="section-label"><span class="num">06</span> สรุปผล</div>
       <div class="stat-grid">
         <div class="stat-card"><div class="v" id="statPoints">0</div><div class="k">จุดพิกัดทั้งหมด</div></div>
         <div class="stat-card"><div class="v" id="statClusters">0</div><div class="k">จำนวนกลุ่ม</div></div>
@@ -376,7 +420,10 @@
 <script>
 /* ============================= App State ============================= */
 const state = {
-  points: [],        // {lat, lng, name}
+  points: [],        // {lat, lng, code, name, area, sla, slaMinutes, slaBucket} — filtered set
+  allPoints: [],       // full parsed dataset before filtering
+  selectedAreas: null,  // null = no filter (all areas); Set of area strings otherwise
+  selectedSlaBuckets: null, // null = no filter; Set of SLA bucket labels otherwise
   radius: 100,        // meters
   mode: 'bubble',      // 'bubble' | 'heat'
   clusters: [],
@@ -510,9 +557,29 @@ const HeatLayer = L.Layer.extend({
 const heatLayer = new HeatLayer([], { radiusMeters: 100 });
 
 /* ============================= File Parsing ============================= */
+const CODE_KEYS = ['รหัสสาขา', 'รหัส', 'code', 'store code', 'branch code', 'sap code', 'id'];
 const LAT_KEYS = ['lat', 'latitude', 'ละติจูด', 'y'];
 const LNG_KEYS = ['lng', 'lon', 'long', 'longitude', 'ลองจิจูด', 'x'];
 const NAME_KEYS = ['name', 'ชื่อ', 'ชื่อสาขา', 'สาขา', 'branch', 'store', 'location', 'สถานที่'];
+const AREA_KEYS = ['พื้นที่', 'area', 'zone', 'เขต', 'region', 'โซน'];
+const SLA_KEYS = ['sla', 'เวลาจัดส่ง', 'delivery time', 'delivery sla', 'lead time', 'เวลาส่งของ', 'เวลา'];
+const SLA_BUCKETS = ['<30 นาที', '30-45 นาที', '45-60 นาที', '60 นาทีขึ้นไป'];
+
+function parseSlaMinutes(slaRaw) {
+  if (!slaRaw) return null;
+  const m = String(slaRaw).match(/(\d+(?:\.\d+)?)/);
+  if (!m) return null;
+  const num = parseFloat(m[1]);
+  const isHours = /ชม|ชั่วโมง|hr|hour/i.test(slaRaw);
+  return isHours ? num * 60 : num;
+}
+function slaBucketOf(minutes) {
+  if (minutes === null || minutes === undefined || isNaN(minutes)) return null;
+  if (minutes < 30) return SLA_BUCKETS[0];
+  if (minutes < 45) return SLA_BUCKETS[1];
+  if (minutes < 60) return SLA_BUCKETS[2];
+  return SLA_BUCKETS[3];
+}
 
 function normHeader(h) { return String(h || '').trim().toLowerCase(); }
 function findColumn(headers, candidates) {
@@ -535,9 +602,12 @@ function parseWorkbookRows(rows, sourceLabel) {
   if (!rows.length) { showToast('ไฟล์ว่างเปล่า หรืออ่านข้อมูลไม่ได้'); return false; }
 
   const headers = rows[0];
+  const codeIdx = findColumn(headers, CODE_KEYS);
   const latIdx = findColumn(headers, LAT_KEYS);
   const lngIdx = findColumn(headers, LNG_KEYS);
   const nameIdx = findColumn(headers, NAME_KEYS);
+  const areaIdx = findColumn(headers, AREA_KEYS);
+  const slaIdx = findColumn(headers, SLA_KEYS);
 
   if (latIdx === -1 || lngIdx === -1) {
     showToast('ไม่พบคอลัมน์ ละติจูด/ลองจิจูด ในไฟล์นี้');
@@ -551,8 +621,13 @@ function parseWorkbookRows(rows, sourceLabel) {
     const lng = parseFloat(row[lngIdx]);
     if (!isFinite(lat) || !isFinite(lng)) continue;
     if (lat < -90 || lat > 90 || lng < -180 || lng > 180) continue;
+    const code = codeIdx !== -1 && row[codeIdx] !== '' ? String(row[codeIdx]).trim() : '';
     const name = nameIdx !== -1 && row[nameIdx] ? String(row[nameIdx]) : `จุดที่ ${pts.length + 1}`;
-    pts.push({ lat, lng, name });
+    const area = areaIdx !== -1 && row[areaIdx] !== '' ? String(row[areaIdx]).trim() : '';
+    const sla = slaIdx !== -1 && row[slaIdx] !== '' ? String(row[slaIdx]).trim() : '';
+    const slaMinutes = parseSlaMinutes(sla);
+    const slaBucket = slaBucketOf(slaMinutes);
+    pts.push({ lat, lng, code, name, area, sla, slaMinutes, slaBucket });
   }
 
   if (!pts.length) {
@@ -560,19 +635,24 @@ function parseWorkbookRows(rows, sourceLabel) {
     return false;
   }
 
-  state.points = pts;
+  state.allPoints = pts;
   document.getElementById('fileMeta').textContent = `${sourceLabel} — ${pts.length.toLocaleString()} จุด`;
   document.getElementById('fileMeta').classList.add('show');
 
   const colMapEl = document.getElementById('colMap');
-  colMapEl.innerHTML =
+  let colMapHtml =
     `ตรวจพบคอลัมน์: <b>${headers[latIdx]}</b> → ละติจูด, <b>${headers[lngIdx]}</b> → ลองจิจูด` +
-    (nameIdx !== -1 ? `, <b>${headers[nameIdx]}</b> → ชื่อสถานที่` : '');
+    (codeIdx !== -1 ? `, <b>${headers[codeIdx]}</b> → รหัสสาขา` : '') +
+    (nameIdx !== -1 ? `, <b>${headers[nameIdx]}</b> → ชื่อสถานที่` : '') +
+    (areaIdx !== -1 ? `, <b>${headers[areaIdx]}</b> → พื้นที่` : '') +
+    (slaIdx !== -1 ? `, <b>${headers[slaIdx]}</b> → เวลาจัดส่ง/SLA` : '');
+  colMapEl.innerHTML = colMapHtml;
   colMapEl.classList.add('show');
 
   document.getElementById('emptyState').style.display = 'none';
-  fitToPoints(pts);
-  recomputeAndRender();
+  populateAreaFilter(pts);
+  populateSlaFilter(pts);
+  applyFilters();
   return true;
 }
 
@@ -657,6 +737,114 @@ function computeClusters(points, radiusMeters) {
   return clusters;
 }
 
+/* ============================= Area & SLA Filters ============================= */
+function populateAreaFilter(points) {
+  const areas = Array.from(new Set(points.map(p => p.area).filter(a => a))).sort((a, b) => a.localeCompare(b, 'th'));
+  const section = document.getElementById('areaSection');
+  const list = document.getElementById('areaChecklist');
+
+  if (!areas.length) {
+    section.style.display = 'none';
+    state.selectedAreas = null;
+    return;
+  }
+
+  section.style.display = 'block';
+  state.selectedAreas = new Set(areas);
+
+  const counts = {};
+  points.forEach(p => { if (p.area) counts[p.area] = (counts[p.area] || 0) + 1; });
+
+  list.innerHTML = areas.map(a => {
+    const id = 'area_' + a.replace(/[^a-zA-Z0-9ก-๙]/g, '_');
+    return `
+      <label class="area-item" for="${id}">
+        <input type="checkbox" class="areaCb" id="${id}" value="${a.replace(/"/g, '&quot;')}" checked />
+        <span>${a}</span>
+        <span class="cnt">${counts[a]}</span>
+      </label>`;
+  }).join('');
+
+  list.querySelectorAll('input.areaCb').forEach(cb => {
+    cb.addEventListener('change', () => {
+      if (cb.checked) state.selectedAreas.add(cb.value);
+      else state.selectedAreas.delete(cb.value);
+      applyFilters();
+    });
+  });
+}
+
+function populateSlaFilter(points) {
+  const section = document.getElementById('slaSection');
+  const list = document.getElementById('slaChecklist');
+  const hasSla = points.some(p => p.slaBucket);
+
+  if (!hasSla) {
+    section.style.display = 'none';
+    state.selectedSlaBuckets = null;
+    return;
+  }
+
+  section.style.display = 'block';
+  state.selectedSlaBuckets = new Set(SLA_BUCKETS);
+
+  const counts = {};
+  points.forEach(p => { if (p.slaBucket) counts[p.slaBucket] = (counts[p.slaBucket] || 0) + 1; });
+
+  list.innerHTML = SLA_BUCKETS.map(b => {
+    const id = 'sla_' + b.replace(/[^a-zA-Z0-9ก-๙]/g, '_');
+    return `
+      <label class="area-item" for="${id}">
+        <input type="checkbox" class="slaCb" id="${id}" value="${b}" checked />
+        <span>${b}</span>
+        <span class="cnt">${counts[b] || 0}</span>
+      </label>`;
+  }).join('');
+
+  list.querySelectorAll('input.slaCb').forEach(cb => {
+    cb.addEventListener('change', () => {
+      if (cb.checked) state.selectedSlaBuckets.add(cb.value);
+      else state.selectedSlaBuckets.delete(cb.value);
+      applyFilters();
+    });
+  });
+}
+
+function applyFilters() {
+  state.points = state.allPoints.filter(p => {
+    const areaOk = !state.selectedAreas || !p.area || state.selectedAreas.has(p.area);
+    const slaOk = !state.selectedSlaBuckets || !p.slaBucket || state.selectedSlaBuckets.has(p.slaBucket);
+    return areaOk && slaOk;
+  });
+  if (!state.points.length) {
+    showToast('ไม่มีจุดที่ตรงกับตัวกรองที่เลือก');
+  }
+  fitToPoints(state.points.length ? state.points : state.allPoints);
+  recomputeAndRender();
+}
+
+document.getElementById('areaSelectAll').addEventListener('click', () => {
+  document.querySelectorAll('#areaChecklist input.areaCb').forEach(cb => { cb.checked = true; });
+  const areas = Array.from(new Set(state.allPoints.map(p => p.area).filter(a => a)));
+  state.selectedAreas = new Set(areas);
+  applyFilters();
+});
+document.getElementById('areaClearAll').addEventListener('click', () => {
+  document.querySelectorAll('#areaChecklist input.areaCb').forEach(cb => { cb.checked = false; });
+  state.selectedAreas = new Set();
+  applyFilters();
+});
+document.getElementById('slaSelectAll').addEventListener('click', () => {
+  document.querySelectorAll('#slaChecklist input.slaCb').forEach(cb => { cb.checked = true; });
+  state.selectedSlaBuckets = new Set(SLA_BUCKETS);
+  applyFilters();
+});
+document.getElementById('slaClearAll').addEventListener('click', () => {
+  document.querySelectorAll('#slaChecklist input.slaCb').forEach(cb => { cb.checked = false; });
+  state.selectedSlaBuckets = new Set();
+  applyFilters();
+});
+
 /* ============================= Rendering ============================= */
 function pinSize(count, maxCount) {
   const min = 13, max = 31;
@@ -687,8 +875,13 @@ function renderBubbles(clusters) {
       iconAnchor: [size / 2, size / 2],
     });
     const marker = L.marker([c.lat, c.lng], { icon });
-    const shown = c.names.slice(0, 15).join(', ');
-    const extra = c.names.length > 15 ? ` และอีก ${c.names.length - 15} แห่ง` : '';
+    const memberLines = c.members.slice(0, 15).map(m => {
+      const codePrefix = m.code ? `${m.code} - ` : '';
+      const extras = [m.area, m.sla ? `SLA ${m.sla}` : ''].filter(Boolean).join(' · ');
+      return extras ? `${codePrefix}${m.name} (${extras})` : `${codePrefix}${m.name}`;
+    });
+    const shown = memberLines.join(', ');
+    const extra = c.members.length > 15 ? ` และอีก ${c.members.length - 15} แห่ง` : '';
     marker.bindPopup(
       `<div class="popup-title">กลุ่มที่ ${c.groupNo} — ${c.count.toLocaleString()} จุด</div>` +
       `<div class="popup-body">${shown}${extra}</div>`
@@ -698,7 +891,10 @@ function renderBubbles(clusters) {
 }
 
 function updateStats(clusters) {
-  document.getElementById('statPoints').textContent = state.points.length.toLocaleString();
+  const totalAll = state.allPoints.length;
+  const shown = state.points.length;
+  document.getElementById('statPoints').textContent =
+    (state.selectedAreas && shown !== totalAll) ? `${shown.toLocaleString()}/${totalAll.toLocaleString()}` : shown.toLocaleString();
   document.getElementById('statClusters').textContent = clusters.length.toLocaleString();
   document.getElementById('statMax').textContent = (clusters[0] ? clusters[0].count : 0).toLocaleString();
   document.getElementById('statSolo').textContent = clusters.filter(c => c.count === 1).length.toLocaleString();
@@ -717,7 +913,15 @@ function applyLayerVisibility() {
 }
 
 function recomputeAndRender() {
-  if (!state.points.length) return;
+  if (!state.allPoints.length) return;
+  if (!state.points.length) {
+    state.clusters = [];
+    clusterLayerGroup.clearLayers();
+    heatLayer.setPoints([]);
+    updateStats([]);
+    document.getElementById('exportBtn').disabled = true;
+    return;
+  }
   state.clusters = computeClusters(state.points, state.radius);
   renderBubbles(state.clusters);
   heatLayer.setPoints(state.points);
@@ -736,7 +940,10 @@ function exportClustersToExcel() {
     c.members.forEach(m => {
       rows.push({
         'Group': c.groupNo,
+        'รหัสสาขา': m.code || '',
         'ชื่อสาขา': m.name,
+        'พื้นที่': m.area || '',
+        'เวลาจัดส่ง/SLA': m.sla || '',
         'ละติจูด': m.lat,
         'ลองจิจูด': m.lng,
         'ระยะห่างจากศูนย์กลางกลุ่ม (ม.)': m.distanceToCenter,
